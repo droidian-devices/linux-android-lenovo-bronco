@@ -794,8 +794,6 @@ static int dispatcher_context_sendcmds(struct adreno_device *adreno_dev,
 		timestamp = drawobj->timestamp;
 		cmdobj = CMDOBJ(drawobj);
 		context = drawobj->context;
-		trace_adreno_cmdbatch_ready(context->id, context->priority,
-			drawobj->timestamp, cmdobj->requeue_cnt);
 		ret = sendcmd(adreno_dev, cmdobj);
 
 		/*
@@ -1962,12 +1960,9 @@ replay:
 static void do_header_and_snapshot(struct kgsl_device *device, int fault,
 		struct adreno_ringbuffer *rb, struct kgsl_drawobj_cmd *cmdobj)
 {
-	struct kgsl_drawobj *drawobj = DRAWOBJ(cmdobj);
-
 	/* Always dump the snapshot on a non-drawobj failure */
 	if (cmdobj == NULL) {
 		adreno_fault_header(device, rb, NULL, fault);
-		kgsl_device_snapshot(device, NULL, NULL, fault & ADRENO_GMU_FAULT);
 		return;
 	}
 
@@ -1977,10 +1972,6 @@ static void do_header_and_snapshot(struct kgsl_device *device, int fault,
 
 	/* Print the fault header */
 	adreno_fault_header(device, rb, cmdobj, fault);
-
-	if (!(drawobj->context->flags & KGSL_CONTEXT_NO_SNAPSHOT))
-		kgsl_device_snapshot(device, drawobj->context, NULL,
-					fault & ADRENO_GMU_FAULT);
 }
 
 static int dispatcher_do_fault(struct adreno_device *adreno_dev)
@@ -2288,8 +2279,6 @@ static void retire_cmdobj(struct adreno_device *adreno_dev,
 	drawctxt->ticks_index = (drawctxt->ticks_index + 1) %
 		SUBMIT_RETIRE_TICKS_SIZE;
 
-	trace_adreno_cmdbatch_done(drawobj->context->id,
-		drawobj->context->priority, drawobj->timestamp);
 #endif
 
 	kgsl_drawobj_destroy(drawobj);
