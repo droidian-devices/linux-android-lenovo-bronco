@@ -17,7 +17,6 @@
 #include <linux/version.h>
 #include <linux/mutex.h>
 #include <linux/device.h>
-#include <linux/i2c.h>
 #if KERNEL_VERSION(5, 5, 0) <= LINUX_VERSION_CODE || defined(EL8) || defined(EL9)
 #include <drm/drm_drv.h>
 #include <drm/drm_fourcc.h>
@@ -54,7 +53,6 @@ struct evdi_device {
 
 	struct evdi_fbdev *fbdev;
 	struct evdi_painter *painter;
-	struct i2c_adapter *i2c_adapter;
 
 	int dev_index;
 };
@@ -159,8 +157,6 @@ int evdi_painter_grabpix_ioctl(struct drm_device *drm_dev, void *data,
 			       struct drm_file *file);
 int evdi_painter_request_update_ioctl(struct drm_device *drm_dev, void *data,
 				      struct drm_file *file);
-int evdi_painter_ddcci_response_ioctl(struct drm_device *drm_dev, void *data,
-				      struct drm_file *file);
 int evdi_painter_enable_cursor_events_ioctl(struct drm_device *drm_dev, void *data,
 					  struct drm_file *file);
 
@@ -183,7 +179,6 @@ void evdi_painter_send_cursor_move(struct evdi_painter *painter,
 bool evdi_painter_needs_full_modeset(struct evdi_painter *painter);
 void evdi_painter_force_full_modeset(struct evdi_painter *painter);
 struct drm_clip_rect evdi_painter_framebuffer_size(struct evdi_painter *painter);
-bool evdi_painter_i2c_data_notify(struct evdi_painter *painter, struct i2c_msg *msg);
 
 int evdi_fb_get_bpp(uint32_t format);
 #endif

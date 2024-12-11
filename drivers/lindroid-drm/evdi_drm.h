@@ -24,7 +24,6 @@
 #define DRM_EVDI_EVENT_CRTC_STATE    0x80000003
 #define DRM_EVDI_EVENT_CURSOR_SET    0x80000004
 #define DRM_EVDI_EVENT_CURSOR_MOVE   0x80000005
-#define DRM_EVDI_EVENT_DDCCI_DATA    0x80000006
 
 struct drm_evdi_event_update_ready {
 	struct drm_event base;
@@ -96,32 +95,16 @@ struct drm_evdi_event_cursor_move {
 	int32_t y;
 };
 
-struct drm_evdi_ddcci_response {
-	const unsigned char * __user buffer;
-	uint32_t buffer_length;
-	uint8_t result;
-};
-
 struct drm_evdi_enable_cursor_events {
 	struct drm_event base;
 	uint8_t enable;
 };
 
-#define DDCCI_BUFFER_SIZE 64
-
-struct drm_evdi_event_ddcci_data {
-	struct drm_event base;
-	unsigned char buffer[DDCCI_BUFFER_SIZE];
-	uint32_t buffer_length;
-	uint16_t flags;
-	uint16_t address;
-};
 
 /* Input ioctls from evdi lib to driver */
 #define DRM_EVDI_CONNECT          0x00
 #define DRM_EVDI_REQUEST_UPDATE   0x01
 #define DRM_EVDI_GRABPIX          0x02
-#define DRM_EVDI_DDCCI_RESPONSE   0x03
 #define DRM_EVDI_ENABLE_CURSOR_EVENTS 0x04
 /* LAST_IOCTL 0x5F -- 96 driver specific ioctls to use */
 
@@ -131,8 +114,6 @@ struct drm_evdi_event_ddcci_data {
 	DRM_EVDI_REQUEST_UPDATE, struct drm_evdi_request_update)
 #define DRM_IOCTL_EVDI_GRABPIX DRM_IOWR(DRM_COMMAND_BASE +  \
 	DRM_EVDI_GRABPIX, struct drm_evdi_grabpix)
-#define DRM_IOCTL_EVDI_DDCCI_RESPONSE DRM_IOWR(DRM_COMMAND_BASE +  \
-	DRM_EVDI_DDCCI_RESPONSE, struct drm_evdi_ddcci_response)
 #define DRM_IOCTL_EVDI_ENABLE_CURSOR_EVENTS DRM_IOWR(DRM_COMMAND_BASE +  \
 	DRM_EVDI_ENABLE_CURSOR_EVENTS, struct drm_evdi_enable_cursor_events)
 
