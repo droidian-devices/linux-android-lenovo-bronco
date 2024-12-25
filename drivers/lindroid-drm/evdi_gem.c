@@ -141,6 +141,7 @@ evdi_gem_create(struct drm_file *file,
 	drm_gem_object_put_unlocked(&obj->base);
 #endif
 	*handle_p = handle;
+	//printk("evdi: Buffer created by: %s", obj->base.import_attach->dmabuf->owner->name);
 	return 0;
 }
 
@@ -423,6 +424,15 @@ int evdi_gem_mmap(struct drm_file *file,
 	return ret;
 }
 
+void print_dma_buf_owner(struct dma_buf *dmabuf) {
+    if (dmabuf && dmabuf->owner) {
+        const char *module_name = module_name(dmabuf->owner);
+        pr_info("DMA-BUF created by module: %s\n", module_name);
+    } else {
+        pr_info("No owner information available for this DMA-BUF\n");
+    }
+}
+
 struct drm_gem_object *
 evdi_prime_import_sg_table(struct drm_device *dev,
 			   struct dma_buf_attachment *attach,
@@ -431,7 +441,8 @@ evdi_prime_import_sg_table(struct drm_device *dev,
 	struct evdi_gem_object *obj;
 	int npages;
 	bool called_by_mutter;
-
+printk("evdi_prime_import_sg_table");
+print_dma_buf_owner(attach->dmabuf);
 	called_by_mutter = evdi_was_called_by_mutter();
 
 	obj = evdi_gem_alloc_object(dev, attach->dmabuf->size);

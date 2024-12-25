@@ -72,6 +72,7 @@ static void evdi_crtc_atomic_flush(
 #endif
 	)
 {
+	printk("evdi_crtc_atomic_flush\n");
 #if KERNEL_VERSION(5, 11, 0) <= LINUX_VERSION_CODE || defined(RPI) || defined(EL8)
 	struct drm_crtc_state *crtc_state = drm_atomic_get_new_crtc_state(state, crtc);
 #else
@@ -100,7 +101,7 @@ static void evdi_mark_full_screen_dirty(struct evdi_device *evdi)
 {
 	const struct drm_clip_rect rect =
 		evdi_painter_framebuffer_size(evdi->painter);
-
+	printk("evdi_mark_full_screen_dirty\n");
 	evdi_painter_mark_dirty(evdi, &rect);
 	evdi_painter_send_update_ready_if_needed(evdi->painter);
 }
@@ -200,11 +201,21 @@ static void evdi_disable_vblank(__always_unused struct drm_crtc *crtc)
 }
 #endif
 
+int evdi_atomic_helper_page_flip(struct drm_crtc *crtc,
+				struct drm_framebuffer *fb,
+				struct drm_pending_vblank_event *event,
+				uint32_t flags,
+				struct drm_modeset_acquire_ctx *ctx)
+{
+	printk("evdi_atomic_helper_page_flip\n");
+	return drm_atomic_helper_page_flip(crtc, fb, event, flags, ctx);
+}
+
 static const struct drm_crtc_funcs evdi_crtc_funcs = {
 	.reset                  = drm_atomic_helper_crtc_reset,
 	.destroy                = evdi_crtc_destroy,
 	.set_config             = drm_atomic_helper_set_config,
-	.page_flip              = drm_atomic_helper_page_flip,
+	.page_flip              = evdi_atomic_helper_page_flip,
 	.atomic_duplicate_state = drm_atomic_helper_crtc_duplicate_state,
 	.atomic_destroy_state   = drm_atomic_helper_crtc_destroy_state,
 
@@ -241,7 +252,7 @@ static void evdi_plane_atomic_update(struct drm_plane *plane,
 	struct drm_rect rect;
 	struct drm_clip_rect clip_rect;
 #endif
-
+printk("evdi_plane_atomic_update\n");
 	if (!plane || !plane->state) {
 		EVDI_WARN("Plane state is null\n");
 		return;
@@ -502,13 +513,18 @@ static int evdi_crtc_init(struct drm_device *dev)
 	return 0;
 }
 
+int evdi_atomic_helper_commit(struct drm_device * dev, struct drm_atomic_state * state, bool nonblock)
+{
+	printk("evdi_atomic_helper_commit\n");
+	return drm_atomic_helper_commit(dev, state, nonblock);
+}
 static const struct drm_mode_config_funcs evdi_mode_funcs = {
 	.fb_create = evdi_fb_user_fb_create,
 #if KERNEL_VERSION(6, 11, 0) < LINUX_VERSION_CODE || defined(EL8)
 #else
 	.output_poll_changed = NULL,
 #endif
-	.atomic_commit = drm_atomic_helper_commit,
+	.atomic_commit = evdi_atomic_helper_commit,
 	.atomic_check = drm_atomic_helper_check
 };
 

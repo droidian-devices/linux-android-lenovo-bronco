@@ -32,7 +32,7 @@ static int evdi_get_modes(struct drm_connector *connector)
 	struct evdi_device *evdi = connector->dev->dev_private;
 	struct edid *edid = NULL;
 	int ret = 0;
-
+EVDI_INFO("GET MODES");
 	edid = (struct edid *)evdi_painter_get_edid_copy(evdi);
 
 	if (!edid) {
@@ -179,14 +179,14 @@ int evdi_connector_init(struct drm_device *dev, struct drm_encoder *encoder)
 {
 	struct drm_connector *connector;
 	struct evdi_device *evdi = dev->dev_private;
-
+EVDI_INFO("Init connector");
 	connector = kzalloc(sizeof(struct drm_connector), GFP_KERNEL);
 	if (!connector)
 		return -ENOMEM;
 
 	/* TODO: Initialize connector with actual connector type */
 	drm_connector_init(dev, connector, &evdi_connector_funcs,
-			   DRM_MODE_CONNECTOR_DVII);
+			   DRM_MODE_CONNECTOR_DisplayPort);
 	drm_connector_helper_add(connector, &evdi_connector_helper_funcs);
 	connector->polled = DRM_CONNECTOR_POLL_HPD;
 

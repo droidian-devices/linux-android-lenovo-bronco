@@ -327,11 +327,19 @@ static void evdi_user_framebuffer_destroy(struct drm_framebuffer *fb)
 	kfree(efb);
 }
 
+	int evdi_atomic_helper_dirtyfb(struct drm_framebuffer *framebuffer,
+		     struct drm_file *file_priv, unsigned flags,
+		     unsigned color, struct drm_clip_rect *clips,
+		     unsigned num_clips){
+				 printk("evdi_atomic_helper_dirtyfb\n");
+				 return 0;
+			}
+
 static const struct drm_framebuffer_funcs evdifb_funcs = {
 	.create_handle = evdi_user_framebuffer_create_handle,
 	.destroy = evdi_user_framebuffer_destroy,
 #if KERNEL_VERSION(5, 0, 0) <= LINUX_VERSION_CODE || defined(EL8)
-	.dirty = drm_atomic_helper_dirtyfb,
+	.dirty = evdi_atomic_helper_dirtyfb,
 #else
 	.dirty = evdi_user_framebuffer_dirty,
 #endif

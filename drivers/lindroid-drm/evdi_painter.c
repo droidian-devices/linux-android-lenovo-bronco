@@ -803,7 +803,7 @@ evdi_painter_connect(struct evdi_device *evdi,
 	evdi_log_process(buf, sizeof(buf));
 
 	if (edid_length < sizeof(struct edid)) {
-		EVDI_ERROR("Edid length too small\n");
+		EVDI_ERROR("Edid length too small, provides is: %d expected: %d\n", edid_length, sizeof(struct edid));
 		return -EINVAL;
 	}
 
