@@ -707,11 +707,7 @@ void evdi_painter_dpms_notify(struct evdi_painter *painter, int mode)
 
 	switch (mode) {
 	case DRM_MODE_DPMS_ON:
-		painter->fg_console = fg_console;
-#if KERNEL_VERSION(5, 4, 0) <= LINUX_VERSION_CODE
 		fallthrough;
-#else
-#endif
 	case DRM_MODE_DPMS_STANDBY:
 	case DRM_MODE_DPMS_SUSPEND:
 	case DRM_MODE_DPMS_OFF:
@@ -1114,38 +1110,6 @@ static void evdi_send_events_work(struct work_struct *work)
 	schedule_delayed_work(&painter->send_events_work, msecs_to_jiffies(5));
 }
 
-#define vt_notifier_block_to_evdi_painter(x) container_of(x, struct evdi_painter, vt_notifier)
-static int evdi_painter_vt_notifier_call(struct notifier_block *blk,
-			    __always_unused unsigned long code, __always_unused void *_param)
-{
-	struct evdi_painter *painter = vt_notifier_block_to_evdi_painter(blk);
-
-	if (painter->is_connected && fg_console != painter->fg_console && !painter->needs_full_modeset) {
-		EVDI_INFO("(card%d) VT switch detected\n", painter->drm_device->primary->index);
-		evdi_painter_dpms_notify(painter, DRM_MODE_DPMS_OFF);
-		evdi_painter_force_full_modeset(painter);
-	}
-
-	return NOTIFY_OK;
-}
-
-
-static void evdi_painter_register_to_vt(struct evdi_painter *painter)
-{
-	painter->vt_notifier.notifier_call = evdi_painter_vt_notifier_call;
-	register_vt_notifier(&painter->vt_notifier);
-
-	EVDI_TEST_HOOK(evdi_testhook_painter_vt_register(&painter->vt_notifier));
-}
-
-static void evdi_painter_unregister_from_vt(struct evdi_painter *painter)
-{
-	unregister_vt_notifier(&painter->vt_notifier);
-	painter->vt_notifier.notifier_call = NULL;
-
-	EVDI_TEST_HOOK(evdi_testhook_painter_vt_register(&painter->vt_notifier));
-}
-
 int evdi_painter_init(struct evdi_device *dev)
 {
 	EVDI_CHECKPT();
@@ -1158,7 +1122,6 @@ int evdi_painter_init(struct evdi_device *dev)
 		dev->painter->crtc = NULL;
 		dev->painter->vblank = NULL;
 		dev->painter->drm_device = dev->ddev;
-		evdi_painter_register_to_vt(dev->painter);
 
 		INIT_LIST_HEAD(&dev->painter->pending_events);
 		INIT_DELAYED_WORK(&dev->painter->send_events_work,
@@ -1177,7 +1140,6 @@ void evdi_painter_cleanup(struct evdi_painter *painter)
 	}
 
 	painter_lock(painter);
-	evdi_painter_unregister_from_vt(painter);
 	kfree(painter->edid);
 	painter->edid_length = 0;
 	painter->edid = NULL;
