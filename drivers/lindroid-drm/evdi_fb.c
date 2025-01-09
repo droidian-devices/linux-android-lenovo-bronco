@@ -234,10 +234,13 @@ struct drm_framebuffer *evdi_fb_user_fb_create(
 {
 	struct drm_gem_object *obj;
 	struct evdi_framebuffer *efb;
+	struct file *memfd_file;
 	int ret;
 	uint32_t size;
 	int bpp = evdi_fb_get_bpp(mode_cmd->pixel_format);
 	uint32_t handle;
+	int read_val;
+	ssize_t bytes_read;
 
 	size = mode_cmd->offsets[0] + mode_cmd->pitches[0] * mode_cmd->height;
 	size = ALIGN(size, PAGE_SIZE);
@@ -247,23 +250,39 @@ struct drm_framebuffer *evdi_fb_user_fb_create(
 		return ERR_PTR(-EINVAL);
 	}
 
+	memfd_file = fget(mode_cmd->handles[0]);
+	if (!memfd_file) {
+		printk("Failed to open fake fb\n");
+		return ERR_PTR(-EINVAL);
+	}
+
+	loff_t pos = 0; // Initialize offset
+bytes_read = kernel_read(memfd_file, &read_val, sizeof(read_val), &pos);
+	if (bytes_read != sizeof(read_val)) {
+		printk("Failed to read from memfd, bytes_read=%zd\n", bytes_read);
+		return ERR_PTR(-EIO);
+	}
+
+	printk("Read value from memfd: %d\n", read_val);
+
 	evdi_gem_create(file, dev, size, &handle);
 	obj = drm_gem_object_lookup(file, handle);
 	if (obj == NULL)
 		return ERR_PTR(-ENOENT);
-
+	printk("evdi_fb_user_fb_create 4\n");
 	if (size > obj->size) {
 		DRM_ERROR("object size not sufficient for fb %d %zu %u %d %d\n",
 			  size, obj->size, mode_cmd->offsets[0],
 			  mode_cmd->pitches[0], mode_cmd->height);
 		goto err_no_mem;
 	}
-
+	printk("evdi_fb_user_fb_create 5\n");
 	efb = kzalloc(sizeof(*efb), GFP_KERNEL);
 	if (efb == NULL)
 		goto err_no_mem;
 	efb->base.obj[0] = obj;
-
+	efb->gralloc_buf_memfd = memfd_file;
+	printk("evdi_fb_user_fb_create 6\n");
 	ret = evdi_framebuffer_init(dev, efb, mode_cmd, to_evdi_bo(obj));
 	if (ret)
 		goto err_inval;
