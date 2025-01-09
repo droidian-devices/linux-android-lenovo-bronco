@@ -188,11 +188,6 @@ static int evdi_drm_device_init(struct drm_device *dev)
 		goto err_free;
 
 	evdi_modeset_init(dev);
-#ifdef CONFIG_FB
-	ret = evdi_fbdev_init(dev);
-	if (ret)
-		goto err_init;
-#endif /* CONFIG_FB */
 
 	ret = drm_vblank_init(dev, 1);
 	if (ret)
@@ -208,9 +203,6 @@ static int evdi_drm_device_init(struct drm_device *dev)
 	return 0;
 
 err_init:
-#ifdef CONFIG_FB
-	evdi_fbdev_cleanup(dev);
-#endif /* CONFIG_FB */
 err_free:
 	EVDI_ERROR("Failed to setup drm device %d\n", ret);
 	evdi_cursor_free(evdi->cursor);
@@ -279,10 +271,6 @@ err_free:
 static void evdi_drm_device_deinit(struct drm_device *dev)
 {
 	drm_kms_helper_poll_fini(dev);
-#ifdef CONFIG_FB
-	evdi_fbdev_unplug(dev);
-	evdi_fbdev_cleanup(dev);
-#endif /* CONFIG_FB */
 	evdi_modeset_cleanup(dev);
 	drm_atomic_helper_shutdown(dev);
 }
