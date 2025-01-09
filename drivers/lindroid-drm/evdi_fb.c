@@ -237,18 +237,20 @@ struct drm_framebuffer *evdi_fb_user_fb_create(
 	int ret;
 	uint32_t size;
 	int bpp = evdi_fb_get_bpp(mode_cmd->pixel_format);
+	uint32_t handle;
+
+	size = mode_cmd->offsets[0] + mode_cmd->pitches[0] * mode_cmd->height;
+	size = ALIGN(size, PAGE_SIZE);
 
 	if (bpp != 32) {
 		EVDI_ERROR("Unsupported bpp (%d)\n", bpp);
 		return ERR_PTR(-EINVAL);
 	}
 
-	obj = drm_gem_object_lookup(file, mode_cmd->handles[0]);
+	evdi_gem_create(file, dev, size, &handle);
+	obj = drm_gem_object_lookup(file, handle);
 	if (obj == NULL)
 		return ERR_PTR(-ENOENT);
-
-	size = mode_cmd->offsets[0] + mode_cmd->pitches[0] * mode_cmd->height;
-	size = ALIGN(size, PAGE_SIZE);
 
 	if (size > obj->size) {
 		DRM_ERROR("object size not sufficient for fb %d %zu %u %d %d\n",

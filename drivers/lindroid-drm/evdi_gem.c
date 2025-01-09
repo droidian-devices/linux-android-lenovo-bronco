@@ -114,7 +114,7 @@ struct evdi_gem_object *evdi_gem_alloc_object(struct drm_device *dev,
 	return obj;
 }
 
-static int
+int
 evdi_gem_create(struct drm_file *file,
 		struct drm_device *dev, uint64_t size, uint32_t *handle_p)
 {
