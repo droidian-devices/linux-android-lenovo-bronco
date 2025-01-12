@@ -41,12 +41,19 @@
 #endif
 
 static struct drm_driver driver;
+int evdi_swap_callback_ioctl(struct drm_device *drm_dev, void *data,
+                    struct drm_file *file);
+int evdi_add_buff_callback_ioctl(struct drm_device *drm_dev, void *data,
+                    struct drm_file *file);
 
 struct drm_ioctl_desc evdi_painter_ioctls[] = {
 	DRM_IOCTL_DEF_DRV(EVDI_CONNECT, evdi_painter_connect_ioctl, EVDI_DRM_UNLOCKED),
 	DRM_IOCTL_DEF_DRV(EVDI_REQUEST_UPDATE, evdi_painter_request_update_ioctl, EVDI_DRM_UNLOCKED),
 	DRM_IOCTL_DEF_DRV(EVDI_GRABPIX, evdi_painter_grabpix_ioctl, EVDI_DRM_UNLOCKED),
 	DRM_IOCTL_DEF_DRV(EVDI_ENABLE_CURSOR_EVENTS, evdi_painter_enable_cursor_events_ioctl, EVDI_DRM_UNLOCKED),
+	DRM_IOCTL_DEF_DRV(EVDI_POLL, evdi_poll_ioctl, EVDI_DRM_UNLOCKED),
+	DRM_IOCTL_DEF_DRV(EVDI_SWAP_CALLBACK, evdi_swap_callback_ioctl, EVDI_DRM_UNLOCKED),
+	DRM_IOCTL_DEF_DRV(EVDI_ADD_BUFF_CALLBACK, evdi_add_buff_callback_ioctl, EVDI_DRM_UNLOCKED),
 };
 
 #if KERNEL_VERSION(5, 11, 0) <= LINUX_VERSION_CODE || defined(EL8)
@@ -152,6 +159,77 @@ static struct drm_driver driver = {
 	.patchlevel = DRIVER_PATCH,
 };
 
+int evdi_swap_callback_ioctl(struct drm_device *drm_dev, void *data,
+                    struct drm_file *file)
+{
+	struct evdi_device *evdi = drm_dev->dev_private;
+	complete(&evdi->poll_completion);
+	return 0;
+}
+
+int evdi_add_buff_callback_ioctl(struct drm_device *drm_dev, void *data,
+                    struct drm_file *file)
+{
+	struct evdi_device *evdi = drm_dev->dev_private;
+	struct drm_evdi_add_buff_callabck *cmd = data;
+	evdi->last_buf_add_id = cmd->buff_id;
+	complete(&evdi->poll_completion);
+	return 0;
+}
+
+int evdi_poll_ioctl(struct drm_device *drm_dev, void *data,
+                    struct drm_file *file)
+{
+	struct evdi_device *evdi = drm_dev->dev_private;
+	struct drm_evdi_poll *cmd = data;
+	int fd;
+
+	EVDI_CHECKPT();
+
+	if (!evdi) {
+		pr_err("evdi is null\n");
+		return -ENODEV;
+	}
+
+	int ret = wait_event_interruptible(evdi->poll_ioct_wq, evdi->poll_event != none);
+
+	if (ret < 0) {
+		// Process is likely beeing killed at this point RIP btw :(, so assume there are no more events
+		pr_err("evdi_poll_ioctl: Wait interrupted by signal\n");
+		evdi->poll_event = none;
+		return ret;
+	}
+
+	cmd->event = evdi->poll_event;
+	cmd->poll_id = -1;
+	// Reqest passed to userspace we should set type back to none so we wount re-send it, we will be able to later identify response with id
+	evdi->poll_event = none;
+
+	switch(cmd->event) {
+		case add_buf:
+			fd = get_unused_fd_flags(O_RDWR);
+			if (fd < 0) {
+				pr_err("Failed to allocate file descriptor\n");
+				return fd;
+			}
+
+			fd_install(fd, (struct file *)evdi->poll_data);
+
+			if (copy_to_user(cmd->data, &fd, sizeof(fd))) {
+				pr_err("Failed to copy file descriptor to userspace\n");
+				put_unused_fd(fd);
+				return -EFAULT;
+			}
+			break;
+		case swap_to:
+			copy_to_user(cmd->data, evdi->poll_data, sizeof(int));
+		default:
+			pr_err("unknown event: %d\n", cmd->event);
+	}
+
+	return 0;
+}
+
 static void evdi_drm_device_release_cb(__always_unused struct drm_device *dev,
 				       __always_unused void *ptr)
 {
@@ -180,6 +258,13 @@ static int evdi_drm_device_init(struct drm_device *dev)
 	evdi->dev_index = dev->primary->index;
 	evdi->cursor_events_enabled = false;
 	dev->dev_private = evdi;
+	evdi->poll_event = none;
+	init_waitqueue_head (&evdi->poll_ioct_wq);
+	init_waitqueue_head (&evdi->poll_response_ioct_wq);
+	mutex_init(&evdi->poll_lock);
+	init_completion(&evdi->poll_completion);
+	evdi->poll_data_size = -1;
+
 	ret = evdi_painter_init(evdi);
 	if (ret)
 		goto err_free;

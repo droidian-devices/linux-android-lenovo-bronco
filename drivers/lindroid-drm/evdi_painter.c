@@ -72,35 +72,8 @@ struct evdi_event_crtc_state_pending {
 	struct drm_evdi_event_crtc_state crtc_state;
 };
 
-#define MAX_DIRTS 16
-
 #define EDID_EXT_BLOCK_SIZE 128
 #define MAX_EDID_SIZE (255 * EDID_EXT_BLOCK_SIZE + sizeof(struct edid))
-
-struct evdi_painter {
-	bool is_connected;
-	struct edid *edid;
-	unsigned int edid_length;
-
-	struct mutex lock;
-	struct drm_clip_rect dirty_rects[MAX_DIRTS];
-	int num_dirts;
-	struct evdi_framebuffer *scanout_fb;
-
-	struct drm_file *drm_filp;
-	struct drm_device *drm_device;
-
-	bool was_update_requested;
-	bool needs_full_modeset;
-	struct drm_crtc *crtc;
-	struct drm_pending_vblank_event *vblank;
-
-	struct list_head pending_events;
-	struct delayed_work send_events_work;
-
-	struct notifier_block vt_notifier;
-	int fg_console;
-};
 
 static void expand_rect(struct drm_clip_rect *a, const struct drm_clip_rect *b)
 {
@@ -636,7 +609,7 @@ static void evdi_send_vblank(struct drm_crtc *crtc,
 	}
 }
 
-static void evdi_painter_send_vblank(struct evdi_painter *painter)
+void evdi_painter_send_vblank(struct evdi_painter *painter)
 {
 	EVDI_CHECKPT();
 
@@ -907,7 +880,7 @@ int evdi_painter_connect_ioctl(struct drm_device *drm_dev, void *data,
 	struct evdi_painter *painter = evdi->painter;
 	struct drm_evdi_connect *cmd = data;
 	int ret;
-
+printk("evdi_painter_connect_ioctl, pixel area limit: %u, per second: %u\n", cmd->pixel_area_limit, cmd->pixel_per_second_limit);
 	EVDI_CHECKPT();
 	if (painter) {
 		if (cmd->connected)

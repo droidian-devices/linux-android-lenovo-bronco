@@ -37,6 +37,7 @@
 #include <drm/drm_framebuffer.h>
 
 #include "evdi_debug.h"
+#include "evdi_drm.h"
 #include "tests/evdi_test.h"
 
 struct evdi_fbdev;
@@ -55,6 +56,14 @@ struct evdi_device {
 	struct evdi_painter *painter;
 
 	int dev_index;
+	enum poll_event_type poll_event;
+	void *poll_data;
+	int poll_data_size;
+	wait_queue_head_t poll_ioct_wq;
+	wait_queue_head_t poll_response_ioct_wq;
+	struct mutex poll_lock;
+	struct completion poll_completion;
+	int last_buf_add_id;
 };
 
 struct evdi_gem_object {
@@ -76,10 +85,41 @@ struct evdi_framebuffer {
 	struct drm_framebuffer base;
 	struct evdi_gem_object *obj;
 	bool active;
-	struct file *gralloc_buf_memfd;
+	int gralloc_buf_id;
+};
+
+#define MAX_DIRTS 16
+
+struct evdi_painter {
+	bool is_connected;
+	struct edid *edid;
+	unsigned int edid_length;
+
+	struct mutex lock;
+	struct drm_clip_rect dirty_rects[MAX_DIRTS];
+	int num_dirts;
+	struct evdi_framebuffer *scanout_fb;
+
+	struct drm_file *drm_filp;
+	struct drm_device *drm_device;
+
+	bool was_update_requested;
+	bool needs_full_modeset;
+	struct drm_crtc *crtc;
+	struct drm_pending_vblank_event *vblank;
+
+	struct list_head pending_events;
+	struct delayed_work send_events_work;
+
+	struct notifier_block vt_notifier;
+	int fg_console;
 };
 
 #define to_evdi_fb(x) container_of(x, struct evdi_framebuffer, base)
+
+
+int evdi_poll_ioctl(struct drm_device *drm_dev, void *data,
+                    struct drm_file *file);
 
 /* modeset */
 void evdi_modeset_init(struct drm_device *dev);

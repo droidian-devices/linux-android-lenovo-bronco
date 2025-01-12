@@ -241,6 +241,7 @@ struct drm_framebuffer *evdi_fb_user_fb_create(
 	uint32_t handle;
 	int read_val;
 	ssize_t bytes_read;
+	struct evdi_device *evdi = dev->dev_private;
 
 	size = mode_cmd->offsets[0] + mode_cmd->pitches[0] * mode_cmd->height;
 	size = ALIGN(size, PAGE_SIZE);
@@ -281,9 +282,27 @@ bytes_read = kernel_read(memfd_file, &read_val, sizeof(read_val), &pos);
 	if (efb == NULL)
 		goto err_no_mem;
 	efb->base.obj[0] = obj;
-	efb->gralloc_buf_memfd = memfd_file;
-	printk("evdi_fb_user_fb_create 6\n");
+
+	mutex_lock(&evdi->poll_lock);
+
+	evdi->poll_event = add_buf;
+	evdi->poll_data = memfd_file;
+	reinit_completion(&evdi->poll_completion);
+	wake_up(&evdi->poll_ioct_wq);
+
+	ret = wait_for_completion_interruptible(&evdi->poll_completion);
+
+	if (ret < 0) {
+		// Process is likely beeing killed at this point RIP btw :(, so assume there are no more events
+		pr_err("evdi_fb_user_fb_create: Wait interrupted by signal\n");
+		evdi->poll_event = none;
+		mutex_unlock(&evdi->poll_lock);
+		return ERR_PTR(-ret);
+	}
+	printk("evdi_fb_user_fb_create 6 buf id: %d\n", evdi->last_buf_add_id);
+	efb->gralloc_buf_id = evdi->last_buf_add_id;
 	ret = evdi_framebuffer_init(dev, efb, mode_cmd, to_evdi_bo(obj));
+	mutex_unlock(&evdi->poll_lock);
 	if (ret)
 		goto err_inval;
 	return &efb->base;

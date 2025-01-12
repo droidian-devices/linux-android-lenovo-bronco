@@ -25,6 +25,12 @@
 #define DRM_EVDI_EVENT_CURSOR_SET    0x80000004
 #define DRM_EVDI_EVENT_CURSOR_MOVE   0x80000005
 
+enum poll_event_type {
+  none,
+  add_buf,
+  swap_to
+};
+
 struct drm_evdi_event_update_ready {
 	struct drm_event base;
 };
@@ -100,12 +106,29 @@ struct drm_evdi_enable_cursor_events {
 	uint8_t enable;
 };
 
+struct drm_evdi_poll {
+	enum poll_event_type event;
+	int poll_id;
+	void *data;
+};
+
+struct drm_evdi_add_buff_callabck {
+	int poll_id;
+	int buff_id;
+};
+
+struct drm_evdi_swap_callabck {
+	int poll_id;
+};
 
 /* Input ioctls from evdi lib to driver */
 #define DRM_EVDI_CONNECT          0x00
 #define DRM_EVDI_REQUEST_UPDATE   0x01
 #define DRM_EVDI_GRABPIX          0x02
 #define DRM_EVDI_ENABLE_CURSOR_EVENTS 0x04
+#define DRM_EVDI_POLL 0x05
+#define DRM_EVDI_ADD_BUFF_CALLBACK 0x06
+#define DRM_EVDI_SWAP_CALLBACK 0x07
 /* LAST_IOCTL 0x5F -- 96 driver specific ioctls to use */
 
 #define DRM_IOCTL_EVDI_CONNECT DRM_IOWR(DRM_COMMAND_BASE +  \
@@ -116,5 +139,11 @@ struct drm_evdi_enable_cursor_events {
 	DRM_EVDI_GRABPIX, struct drm_evdi_grabpix)
 #define DRM_IOCTL_EVDI_ENABLE_CURSOR_EVENTS DRM_IOWR(DRM_COMMAND_BASE +  \
 	DRM_EVDI_ENABLE_CURSOR_EVENTS, struct drm_evdi_enable_cursor_events)
+#define DRM_IOCTL_EVDI_POLL DRM_IOWR(DRM_COMMAND_BASE +  \
+	DRM_EVDI_POLL, struct drm_evdi_poll)
+#define DRM_IOCTL_EVDI_ADD_BUFF_CALLBACK DRM_IOWR(DRM_COMMAND_BASE +  \
+	DRM_EVDI_ADD_BUFF_CALLBACK, struct drm_evdi_add_buff_callabck)
+#define DRM_IOCTL_EVDI_SWAP_CALLBACK DRM_IOWR(DRM_COMMAND_BASE +  \
+	DRM_EVDI_SWAP_CALLBACK, struct drm_evdi_swap_callabck)
 
 #endif /* __EVDI_UAPI_DRM_H__ */

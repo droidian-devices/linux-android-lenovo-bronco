@@ -92,6 +92,19 @@ static void evdi_crtc_atomic_flush(
 
 	evdi_painter_set_vblank(evdi->painter, crtc, crtc_state->event);
 	evdi_painter_send_update_ready_if_needed(evdi->painter);
+	struct evdi_framebuffer *efb = evdi->painter->scanout_fb;
+	printk("evdi_atomic_helper_page_flip\n");
+//	int ret = wait_event_interruptible(evdi->poll_response_ioct_wq, !evdi->poll_done);
+
+//	if (ret < 0) {
+		// Process is likely beeing killed at this point RIP btw :(, so assume there are no more events
+	//	pr_err("evdi_crtc_atomic_flush: Wait interrupted by signal\n");
+		//evdi->poll_event = none;
+		//evdi->poll_done = false;
+		//return;
+	//}
+	//evdi->poll_done = false;
+	evdi_painter_send_vblank(evdi->painter);
 	crtc_state->event = NULL;
 }
 
@@ -201,13 +214,42 @@ static void evdi_disable_vblank(__always_unused struct drm_crtc *crtc)
 }
 #endif
 
+void evdi_vblank(struct evdi_device *evdi) {
+	struct evdi_framebuffer *efb = evdi->painter->scanout_fb;
+}
+
 int evdi_atomic_helper_page_flip(struct drm_crtc *crtc,
 				struct drm_framebuffer *fb,
 				struct drm_pending_vblank_event *event,
 				uint32_t flags,
 				struct drm_modeset_acquire_ctx *ctx)
 {
-	printk("evdi_atomic_helper_page_flip\n");
+	struct drm_device *dev = crtc->dev;
+	struct evdi_device *evdi = dev->dev_private;
+	struct evdi_framebuffer *efb = evdi->painter->scanout_fb;
+	int ret;
+
+	mutex_lock(&evdi->poll_lock);
+
+	printk("evdi_atomic_helper_page_flip to: %d\n", efb->gralloc_buf_id);
+
+	evdi->poll_event = swap_to;
+	evdi->poll_data = &efb->gralloc_buf_id;
+	reinit_completion(&evdi->poll_completion);
+	wake_up(&evdi->poll_ioct_wq);
+
+	ret = wait_for_completion_interruptible(&evdi->poll_completion);
+
+	if (ret < 0) {
+		// Process is likely beeing killed at this point RIP btw :(, so assume there are no more events
+		pr_err("evdi_atomic_helper_page_flip: Wait interrupted by signal\n");
+		evdi->poll_event = none;
+		mutex_unlock(&evdi->poll_lock);
+		return ret;
+	}
+	mutex_unlock(&evdi->poll_lock);
+	evdi_painter_send_vblank(evdi->painter);
+
 	return drm_atomic_helper_page_flip(crtc, fb, event, flags, ctx);
 }
 
