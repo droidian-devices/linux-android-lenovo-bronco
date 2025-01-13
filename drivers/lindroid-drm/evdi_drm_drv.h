@@ -115,6 +115,15 @@ struct evdi_painter {
 	int fg_console;
 };
 
+struct evdi_add_gralloc_buf {
+	struct file *memfd_file;
+	int version;
+	int numFds;
+	int numInts;
+	struct file **data_files;
+	int *data_ints;
+};
+
 #define to_evdi_fb(x) container_of(x, struct evdi_framebuffer, base)
 
 

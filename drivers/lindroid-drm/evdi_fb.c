@@ -235,12 +235,14 @@ struct drm_framebuffer *evdi_fb_user_fb_create(
 	struct drm_gem_object *obj;
 	struct evdi_framebuffer *efb;
 	struct file *memfd_file;
+	struct file *fd_file;
 	int ret;
 	uint32_t size;
 	int bpp = evdi_fb_get_bpp(mode_cmd->pixel_format);
 	uint32_t handle;
-	int read_val;
+	int version, numFds, numInts, fd;
 	ssize_t bytes_read;
+	struct evdi_add_gralloc_buf *add_gralloc_buf;
 	struct evdi_device *evdi = dev->dev_private;
 
 	size = mode_cmd->offsets[0] + mode_cmd->pitches[0] * mode_cmd->height;
@@ -258,13 +260,52 @@ struct drm_framebuffer *evdi_fb_user_fb_create(
 	}
 
 	loff_t pos = 0; // Initialize offset
-bytes_read = kernel_read(memfd_file, &read_val, sizeof(read_val), &pos);
-	if (bytes_read != sizeof(read_val)) {
-		printk("Failed to read from memfd, bytes_read=%zd\n", bytes_read);
+	bytes_read = kernel_read(memfd_file, &version, sizeof(version), &pos);
+	if (bytes_read != sizeof(version)) {
+		printk("Failed to read version from memfd, bytes_read=%zd\n", bytes_read);
 		return ERR_PTR(-EIO);
 	}
 
-	printk("Read value from memfd: %d\n", read_val);
+	bytes_read = kernel_read(memfd_file, &numFds, sizeof(numFds), &pos);
+	if (bytes_read != sizeof(numFds)) {
+		printk("Failed to read numFds from memfd, bytes_read=%zd\n", bytes_read);
+		return ERR_PTR(-EIO);
+	}
+
+	bytes_read = kernel_read(memfd_file, &numInts, sizeof(numInts), &pos);
+	if (bytes_read != sizeof(numInts)) {
+		printk("Failed to read numInts from memfd, bytes_read=%zd\n", bytes_read);
+		return ERR_PTR(-EIO);
+	}
+	add_gralloc_buf = kzalloc(sizeof(struct evdi_add_gralloc_buf), GFP_KERNEL);
+	add_gralloc_buf->memfd_file = memfd_file;
+	add_gralloc_buf->numFds = numFds;
+	add_gralloc_buf->numInts = numInts;
+	add_gralloc_buf->data_ints = kzalloc(sizeof(int)*numInts, GFP_KERNEL);
+	add_gralloc_buf->data_files = kzalloc(sizeof(struct file*)*numFds, GFP_KERNEL);
+
+	printk("Read value from add buf memfd version: %d, numFds: %d, numInts: %d\n", version, numFds, numInts);
+
+	for(int i = 0; i < numFds; i++) {
+		bytes_read = kernel_read(memfd_file, &fd, sizeof(fd), &pos);
+		if (bytes_read != sizeof(fd)) {
+			printk("Failed to read fd from memfd, bytes_read=%zd\n", bytes_read);
+			return ERR_PTR(-EIO);
+		}
+		fd_file = fget(fd);
+		if (!fd_file) {
+			printk("Failed to open fake fb\n");
+			return ERR_PTR(-EINVAL);
+		}
+		add_gralloc_buf->data_files[i] = fd_file;
+
+	}
+
+	bytes_read = kernel_read(memfd_file, add_gralloc_buf->data_ints, sizeof(int) *numInts, &pos);
+	if (bytes_read != sizeof(int) *numInts) {
+		printk("Failed to read ints from memfd, bytes_read=%zd\n", bytes_read);
+		return ERR_PTR(-EIO);
+	}
 
 	evdi_gem_create(file, dev, size, &handle);
 	obj = drm_gem_object_lookup(file, handle);
@@ -286,7 +327,7 @@ bytes_read = kernel_read(memfd_file, &read_val, sizeof(read_val), &pos);
 	mutex_lock(&evdi->poll_lock);
 
 	evdi->poll_event = add_buf;
-	evdi->poll_data = memfd_file;
+	evdi->poll_data = add_gralloc_buf;
 	reinit_completion(&evdi->poll_completion);
 	wake_up(&evdi->poll_ioct_wq);
 

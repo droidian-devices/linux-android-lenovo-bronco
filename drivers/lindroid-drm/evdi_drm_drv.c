@@ -182,7 +182,9 @@ int evdi_poll_ioctl(struct drm_device *drm_dev, void *data,
 {
 	struct evdi_device *evdi = drm_dev->dev_private;
 	struct drm_evdi_poll *cmd = data;
-	int fd;
+	int fd, fd_tmp;
+	ssize_t bytes_write;
+	loff_t pos;
 
 	EVDI_CHECKPT();
 
@@ -207,13 +209,26 @@ int evdi_poll_ioctl(struct drm_device *drm_dev, void *data,
 
 	switch(cmd->event) {
 		case add_buf:
+			struct evdi_add_gralloc_buf *add_gralloc_buf = evdi->poll_data;
 			fd = get_unused_fd_flags(O_RDWR);
 			if (fd < 0) {
 				pr_err("Failed to allocate file descriptor\n");
 				return fd;
 			}
 
-			fd_install(fd, (struct file *)evdi->poll_data);
+			fd_install(fd, add_gralloc_buf->memfd_file);
+
+			for(int i = 0; i < add_gralloc_buf->numFds; i++) {
+				fd_tmp = get_unused_fd_flags(O_RDWR);
+				fd_install(fd_tmp, add_gralloc_buf->data_files[i]);
+				pos = sizeof(int) * (3 + i);
+				bytes_write = kernel_write(add_gralloc_buf->memfd_file, &fd_tmp, sizeof(fd_tmp), &pos);
+				if (bytes_write != sizeof(fd_tmp)) {
+					pr_err("Failed to write fd\n");
+					put_unused_fd(fd);
+					return -EFAULT;
+				}
+			}
 
 			if (copy_to_user(cmd->data, &fd, sizeof(fd))) {
 				pr_err("Failed to copy file descriptor to userspace\n");
