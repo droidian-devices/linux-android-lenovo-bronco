@@ -13,7 +13,6 @@
 
 #include <linux/version.h>
 #include <drm/drm_crtc.h>
-#include <drm/drm_edid.h>
 #include <drm/drm_crtc_helper.h>
 #include <drm/drm_atomic_helper.h>
 #include "evdi_drm_drv.h"
@@ -30,35 +29,32 @@
 static int evdi_get_modes(struct drm_connector *connector)
 {
 	struct evdi_device *evdi = connector->dev->dev_private;
-	struct edid *edid = NULL;
 	int ret = 0;
+	struct drm_display_mode *new_mode;
 EVDI_INFO("GET MODES");
-	edid = (struct edid *)evdi_painter_get_edid_copy(evdi);
 
-	if (!edid) {
-#if KERNEL_VERSION(4, 19, 0) <= LINUX_VERSION_CODE || defined(EL8)
-		drm_connector_update_edid_property(connector, NULL);
-#else
-		drm_mode_connector_update_edid_property(connector, NULL);
-#endif
-		return 0;
-	}
+	new_mode = drm_mode_create(connector->dev);
+	strncpy(new_mode->name, "Lindroid", 8);
+	new_mode->clock = evdi->painter->height * evdi->painter->width * evdi->painter->refresh_rate / 1000;
+	new_mode->hdisplay = evdi->painter->width;
+	new_mode->hsync_start = evdi->painter->width;
+	new_mode->hsync_end = evdi->painter->width;
+	new_mode->htotal = evdi->painter->width;
+	new_mode->vdisplay = evdi->painter->height;
+	new_mode->vsync_start = evdi->painter->height;
+	new_mode->vsync_end = evdi->painter->height;
+	new_mode->vtotal = evdi->painter->height;
+	new_mode->flags = 0;
+	new_mode->type = DRM_MODE_TYPE_DRIVER | DRM_MODE_TYPE_PREFERRED;
 
-#if KERNEL_VERSION(4, 19, 0) <= LINUX_VERSION_CODE || defined(EL8)
-	ret = drm_connector_update_edid_property(connector, edid);
-#else
-	ret = drm_mode_connector_update_edid_property(connector, edid);
-#endif
-
+	drm_mode_probed_add(connector, new_mode);
 	if (ret) {
 		EVDI_ERROR("Failed to set edid property! error: %d", ret);
 		goto err;
 	}
 
-	ret = drm_add_edid_modes(connector, edid);
 	EVDI_INFO("(card%d) Edid property set", evdi->dev_index);
 err:
-	kfree(edid);
 	return ret;
 }
 

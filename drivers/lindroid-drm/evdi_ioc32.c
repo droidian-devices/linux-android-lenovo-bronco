@@ -28,19 +28,9 @@
 #else
 #include <drm/drmP.h>
 #endif
-#include <drm/drm_edid.h>
 #include "evdi_drm.h"
 
 #include "evdi_drm_drv.h"
-
-struct drm_evdi_connect32 {
-	int32_t connected;
-	int32_t dev_index;
-	uint32_t edid_ptr32;
-	uint32_t edid_length;
-	uint32_t pixel_area_limit;
-	uint32_t pixel_per_second_limit;
-};
 
 struct drm_evdi_grabpix32 {
 	uint32_t mode;
@@ -51,26 +41,6 @@ struct drm_evdi_grabpix32 {
 	int32_t num_rects;
 	uint32_t rects_ptr32;
 };
-
-static int compat_evdi_connect(struct file *file,
-				unsigned int __always_unused cmd,
-				unsigned long arg)
-{
-	struct drm_evdi_connect32 req32;
-	struct drm_evdi_connect krequest;
-
-	if (copy_from_user(&req32, (void __user *)arg, sizeof(req32)))
-		return -EFAULT;
-
-	krequest.connected = req32.connected;
-	krequest.dev_index = req32.dev_index;
-	krequest.edid = compat_ptr(req32.edid_ptr32);
-	krequest.edid_length = req32.edid_length;
-	krequest.pixel_area_limit = req32.pixel_area_limit;
-	krequest.pixel_per_second_limit = req32.pixel_per_second_limit;
-
-	return drm_ioctl_kernel(file, evdi_painter_connect_ioctl, &krequest, 0);
-}
 
 static int compat_evdi_grabpix(struct file *file,
 				unsigned int __always_unused cmd,
@@ -102,7 +72,6 @@ static int compat_evdi_grabpix(struct file *file,
 }
 
 static drm_ioctl_compat_t *evdi_compat_ioctls[] = {
-	[DRM_EVDI_CONNECT] = compat_evdi_connect,
 	[DRM_EVDI_GRABPIX] = compat_evdi_grabpix,
 };
 

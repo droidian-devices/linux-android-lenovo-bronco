@@ -18,7 +18,6 @@
 #else
 #include <drm/drmP.h>
 #endif
-#include <drm/drm_edid.h>
 #include "evdi_drm.h"
 #include "evdi_drm_drv.h"
 #include "evdi_cursor.h"
@@ -71,9 +70,6 @@ struct evdi_event_crtc_state_pending {
 	struct drm_pending_event base;
 	struct drm_evdi_event_crtc_state crtc_state;
 };
-
-#define EDID_EXT_BLOCK_SIZE 128
-#define MAX_EDID_SIZE (255 * EDID_EXT_BLOCK_SIZE + sizeof(struct edid))
 
 static void expand_rect(struct drm_clip_rect *a, const struct drm_clip_rect *b)
 {
@@ -199,27 +195,6 @@ static void copy_cursor_pixels(struct evdi_framebuffer *efb,
 bool evdi_painter_is_connected(struct evdi_painter *painter)
 {
 	return painter ? painter->is_connected : false;
-}
-
-u8 *evdi_painter_get_edid_copy(struct evdi_device *evdi)
-{
-	u8 *block = NULL;
-
-	EVDI_CHECKPT();
-
-	painter_lock(evdi->painter);
-	if (evdi_painter_is_connected(evdi->painter) &&
-		evdi->painter->edid &&
-		evdi->painter->edid_length) {
-		block = kmalloc(evdi->painter->edid_length, GFP_KERNEL);
-		if (block) {
-			memcpy(block,
-			       evdi->painter->edid,
-			       evdi->painter->edid_length);
-		}
-	}
-	painter_unlock(evdi->painter);
-	return block;
 }
 
 static bool is_evdi_event_squashable(struct drm_pending_event *event)
@@ -759,46 +734,13 @@ static void evdi_painter_events_cleanup(struct evdi_painter *painter)
 
 static int
 evdi_painter_connect(struct evdi_device *evdi,
-		     void const __user *edid_data, unsigned int edid_length,
-		     uint32_t pixel_area_limit,
-		     uint32_t pixel_per_second_limit,
+		     int width, int height, int refresh_rate,
 		     struct drm_file *file, __always_unused int dev_index)
 {
 	struct evdi_painter *painter = evdi->painter;
-	struct edid *new_edid = NULL;
-	unsigned int expected_edid_size = 0;
 	char buf[100];
 
 	evdi_log_process(buf, sizeof(buf));
-
-	if (edid_length < sizeof(struct edid)) {
-		EVDI_ERROR("Edid length too small, provides is: %d expected: %d\n", edid_length, sizeof(struct edid));
-		return -EINVAL;
-	}
-
-	if (edid_length > MAX_EDID_SIZE) {
-		EVDI_ERROR("Edid length too large\n");
-		return -EINVAL;
-	}
-
-	new_edid = kzalloc(edid_length, GFP_KERNEL);
-	if (!new_edid)
-		return -ENOMEM;
-
-	if (copy_from_user(new_edid, edid_data, edid_length)) {
-		EVDI_ERROR("(card%d) Failed to read edid\n", evdi->dev_index);
-		kfree(new_edid);
-		return -EFAULT;
-	}
-
-	expected_edid_size = sizeof(struct edid) +
-			     new_edid->extensions * EDID_EXT_BLOCK_SIZE;
-	if (expected_edid_size != edid_length) {
-		EVDI_ERROR("Wrong edid size. Expected %d but is %d\n",
-			   expected_edid_size, edid_length);
-		kfree(new_edid);
-		return -EINVAL;
-	}
 
 	if (painter->drm_filp)
 		EVDI_WARN("(card%d) Double connect - replacing %p with %p\n",
@@ -806,12 +748,10 @@ evdi_painter_connect(struct evdi_device *evdi,
 
 	painter_lock(painter);
 
-	evdi->pixel_area_limit = pixel_area_limit;
-	evdi->pixel_per_second_limit = pixel_per_second_limit;
+	painter->width = width;
+	painter->height = height;
+	painter->refresh_rate = refresh_rate;
 	painter->drm_filp = file;
-	kfree(painter->edid);
-	painter->edid_length = edid_length;
-	painter->edid = new_edid;
 	painter->is_connected = true;
 	painter->needs_full_modeset = true;
 
@@ -880,15 +820,13 @@ int evdi_painter_connect_ioctl(struct drm_device *drm_dev, void *data,
 	struct evdi_painter *painter = evdi->painter;
 	struct drm_evdi_connect *cmd = data;
 	int ret;
-printk("evdi_painter_connect_ioctl, pixel area limit: %u, per second: %u\n", cmd->pixel_area_limit, cmd->pixel_per_second_limit);
 	EVDI_CHECKPT();
 	if (painter) {
 		if (cmd->connected)
 			ret = evdi_painter_connect(evdi,
-					     cmd->edid,
-					     cmd->edid_length,
-					     cmd->pixel_area_limit,
-					     cmd->pixel_per_second_limit,
+					     cmd->width,
+					     cmd->height,
+					     cmd->refresh_rate,
 					     file,
 					     cmd->dev_index);
 		else
@@ -1089,8 +1027,9 @@ int evdi_painter_init(struct evdi_device *dev)
 	dev->painter = kzalloc(sizeof(*dev->painter), GFP_KERNEL);
 	if (dev->painter) {
 		mutex_init(&dev->painter->lock);
-		dev->painter->edid = NULL;
-		dev->painter->edid_length = 0;
+		dev->painter->width = 0;
+		dev->painter->height = 0;
+		dev->painter->refresh_rate = 0;
 		dev->painter->needs_full_modeset = true;
 		dev->painter->crtc = NULL;
 		dev->painter->vblank = NULL;
@@ -1113,9 +1052,9 @@ void evdi_painter_cleanup(struct evdi_painter *painter)
 	}
 
 	painter_lock(painter);
-	kfree(painter->edid);
-	painter->edid_length = 0;
-	painter->edid = NULL;
+	painter->width = 0;
+	painter->height = 0;
+	painter->refresh_rate = 0;
 	if (painter->scanout_fb)
 		drm_framebuffer_put(&painter->scanout_fb->base);
 	painter->scanout_fb = NULL;

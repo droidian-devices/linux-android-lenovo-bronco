@@ -92,8 +92,9 @@ struct evdi_framebuffer {
 
 struct evdi_painter {
 	bool is_connected;
-	struct edid *edid;
-	unsigned int edid_length;
+	uint32_t width;
+	uint32_t height;
+	uint32_t refresh_rate;
 
 	struct mutex lock;
 	struct drm_clip_rect dirty_rects[MAX_DIRTS];
@@ -179,7 +180,6 @@ int evdi_gem_fault(struct vm_fault *vmf);
 
 bool evdi_painter_is_connected(struct evdi_painter *painter);
 void evdi_painter_close(struct evdi_device *evdi, struct drm_file *file);
-u8 *evdi_painter_get_edid_copy(struct evdi_device *evdi);
 int evdi_painter_get_num_dirts(struct evdi_painter *painter);
 void evdi_painter_mark_dirty(struct evdi_device *evdi,
 			     const struct drm_clip_rect *rect);

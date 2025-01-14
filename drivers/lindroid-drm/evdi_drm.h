@@ -57,10 +57,9 @@ struct drm_evdi_event_crtc_state {
 struct drm_evdi_connect {
 	int32_t connected;
 	int32_t dev_index;
-	const unsigned char * __user edid;
-	uint32_t edid_length;
-	uint32_t pixel_area_limit;
-	uint32_t pixel_per_second_limit;
+	uint32_t width;
+	uint32_t height;
+	uint32_t refresh_rate;
 };
 
 struct drm_evdi_request_update {
