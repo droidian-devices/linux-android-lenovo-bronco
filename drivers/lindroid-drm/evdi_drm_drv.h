@@ -150,7 +150,8 @@ struct drm_framebuffer *evdi_fb_user_fb_create(
 				struct drm_device *dev,
 				struct drm_file *file,
 				const struct drm_mode_fb_cmd2 *mode_cmd);
-
+int evdi_gem_create(struct drm_file *file,
+		struct drm_device *dev, uint64_t size, uint32_t *handle_p);
 int evdi_dumb_create(struct drm_file *file_priv,
 		     struct drm_device *dev, struct drm_mode_create_dumb *args);
 int evdi_gem_mmap(struct drm_file *file_priv,
@@ -183,6 +184,7 @@ void evdi_painter_close(struct evdi_device *evdi, struct drm_file *file);
 int evdi_painter_get_num_dirts(struct evdi_painter *painter);
 void evdi_painter_mark_dirty(struct evdi_device *evdi,
 			     const struct drm_clip_rect *rect);
+void evdi_painter_send_vblank(struct evdi_painter *painter);
 void evdi_painter_set_vblank(struct evdi_painter *painter,
 			     struct drm_crtc *crtc,
 			     struct drm_pending_vblank_event *vblank);
