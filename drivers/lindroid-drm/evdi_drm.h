@@ -28,6 +28,7 @@
 enum poll_event_type {
   none,
   add_buf,
+  destroy_buf,
   swap_to
 };
 
@@ -116,6 +117,10 @@ struct drm_evdi_add_buff_callabck {
 	int buff_id;
 };
 
+struct drm_evdi_destroy_buff_callabck {
+	int poll_id;
+};
+
 struct drm_evdi_swap_callabck {
 	int poll_id;
 };
@@ -127,7 +132,8 @@ struct drm_evdi_swap_callabck {
 #define DRM_EVDI_ENABLE_CURSOR_EVENTS 0x04
 #define DRM_EVDI_POLL 0x05
 #define DRM_EVDI_ADD_BUFF_CALLBACK 0x06
-#define DRM_EVDI_SWAP_CALLBACK 0x07
+#define DRM_EVDI_DESTROY_BUFF_CALLBACK 0x07
+#define DRM_EVDI_SWAP_CALLBACK 0x08
 /* LAST_IOCTL 0x5F -- 96 driver specific ioctls to use */
 
 #define DRM_IOCTL_EVDI_CONNECT DRM_IOWR(DRM_COMMAND_BASE +  \
@@ -142,6 +148,8 @@ struct drm_evdi_swap_callabck {
 	DRM_EVDI_POLL, struct drm_evdi_poll)
 #define DRM_IOCTL_EVDI_ADD_BUFF_CALLBACK DRM_IOWR(DRM_COMMAND_BASE +  \
 	DRM_EVDI_ADD_BUFF_CALLBACK, struct drm_evdi_add_buff_callabck)
+#define DRM_IOCTL_EVDI_DESTROY_BUFF_CALLBACK DRM_IOWR(DRM_COMMAND_BASE +  \
+	DRM_EVDI_DESTROY_BUFF_CALLBACK, struct drm_evdi_destroy_buff_callabck)
 #define DRM_IOCTL_EVDI_SWAP_CALLBACK DRM_IOWR(DRM_COMMAND_BASE +  \
 	DRM_EVDI_SWAP_CALLBACK, struct drm_evdi_swap_callabck)
 

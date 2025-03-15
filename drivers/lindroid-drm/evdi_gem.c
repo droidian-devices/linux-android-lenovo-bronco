@@ -171,6 +171,7 @@ static int evdi_align_pitch(int width, int cpp)
 int evdi_dumb_create(struct drm_file *file,
 		     struct drm_device *dev, struct drm_mode_create_dumb *args)
 {
+	printk("evdi_dumb_create!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n");
 	args->pitch = evdi_align_pitch(args->width, DIV_ROUND_UP(args->bpp, 8));
 
 	args->size = args->pitch * args->height;

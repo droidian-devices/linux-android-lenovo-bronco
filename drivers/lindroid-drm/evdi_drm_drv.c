@@ -46,6 +46,9 @@ int evdi_swap_callback_ioctl(struct drm_device *drm_dev, void *data,
 int evdi_add_buff_callback_ioctl(struct drm_device *drm_dev, void *data,
                     struct drm_file *file);
 
+int evdi_destroy_buff_callback_ioctl(struct drm_device *drm_dev, void *data,
+                    struct drm_file *file);
+
 struct drm_ioctl_desc evdi_painter_ioctls[] = {
 	DRM_IOCTL_DEF_DRV(EVDI_CONNECT, evdi_painter_connect_ioctl, EVDI_DRM_UNLOCKED),
 	DRM_IOCTL_DEF_DRV(EVDI_REQUEST_UPDATE, evdi_painter_request_update_ioctl, EVDI_DRM_UNLOCKED),
@@ -54,6 +57,7 @@ struct drm_ioctl_desc evdi_painter_ioctls[] = {
 	DRM_IOCTL_DEF_DRV(EVDI_POLL, evdi_poll_ioctl, EVDI_DRM_UNLOCKED),
 	DRM_IOCTL_DEF_DRV(EVDI_SWAP_CALLBACK, evdi_swap_callback_ioctl, EVDI_DRM_UNLOCKED),
 	DRM_IOCTL_DEF_DRV(EVDI_ADD_BUFF_CALLBACK, evdi_add_buff_callback_ioctl, EVDI_DRM_UNLOCKED),
+	DRM_IOCTL_DEF_DRV(EVDI_DESTROY_BUFF_CALLBACK, evdi_destroy_buff_callback_ioctl, EVDI_DRM_UNLOCKED),
 };
 
 #if KERNEL_VERSION(5, 11, 0) <= LINUX_VERSION_CODE || defined(EL8)
@@ -177,6 +181,14 @@ int evdi_add_buff_callback_ioctl(struct drm_device *drm_dev, void *data,
 	return 0;
 }
 
+int evdi_destroy_buff_callback_ioctl(struct drm_device *drm_dev, void *data,
+                    struct drm_file *file)
+{
+	struct evdi_device *evdi = drm_dev->dev_private;
+	complete(&evdi->poll_completion);
+	return 0;
+}
+
 int evdi_poll_ioctl(struct drm_device *drm_dev, void *data,
                     struct drm_file *file)
 {
@@ -237,7 +249,9 @@ int evdi_poll_ioctl(struct drm_device *drm_dev, void *data,
 			}
 			break;
 		case swap_to:
+		case destroy_buf:
 			copy_to_user(cmd->data, evdi->poll_data, sizeof(int));
+			break;
 		default:
 			pr_err("unknown event: %d\n", cmd->event);
 	}

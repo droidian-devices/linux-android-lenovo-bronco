@@ -177,7 +177,9 @@ static int evdi_user_framebuffer_create_handle(struct drm_framebuffer *fb,
 static void evdi_user_framebuffer_destroy(struct drm_framebuffer *fb)
 {
 	struct evdi_framebuffer *efb = to_evdi_fb(fb);
-
+	struct drm_device *dev = efb->base.dev;
+	struct evdi_device *evdi = dev->dev_private;
+	int ret;
 	EVDI_CHECKPT();
 	if (efb->obj)
 #if KERNEL_VERSION(5, 9, 0) <= LINUX_VERSION_CODE || defined(EL8)
@@ -186,6 +188,27 @@ static void evdi_user_framebuffer_destroy(struct drm_framebuffer *fb)
 		drm_gem_object_put_unlocked(&efb->obj->base);
 #endif
 	drm_framebuffer_cleanup(fb);
+
+	mutex_lock(&evdi->poll_lock);
+
+	printk("evdi_user_framebuffer_create_handle id: %d\n", efb->gralloc_buf_id);
+
+	evdi->poll_event = destroy_buf;
+	evdi->poll_data = &efb->gralloc_buf_id;
+	reinit_completion(&evdi->poll_completion);
+	wake_up(&evdi->poll_ioct_wq);
+
+	ret = wait_for_completion_interruptible(&evdi->poll_completion);
+
+	if (ret < 0) {
+		// Process is likely beeing killed at this point RIP btw :(, so assume there are no more events
+		pr_err("evdi_user_framebuffer_destroy: Wait interrupted by signal\n");
+		evdi->poll_event = none;
+		mutex_unlock(&evdi->poll_lock);
+		return;
+	}
+	mutex_unlock(&evdi->poll_lock);
+
 	kfree(efb);
 }
 
@@ -255,7 +278,7 @@ struct drm_framebuffer *evdi_fb_user_fb_create(
 
 	memfd_file = fget(mode_cmd->handles[0]);
 	if (!memfd_file) {
-		printk("Failed to open fake fb\n");
+		printk("Failed to open fake fb: %d\n", mode_cmd->handles[0]);
 		return ERR_PTR(-EINVAL);
 	}
 
@@ -294,7 +317,7 @@ struct drm_framebuffer *evdi_fb_user_fb_create(
 		}
 		fd_file = fget(fd);
 		if (!fd_file) {
-			printk("Failed to open fake fb\n");
+			printk("Failed to open fake fb's %d fd file: %d\n", mode_cmd->handles[0], fd);
 			return ERR_PTR(-EINVAL);
 		}
 		add_gralloc_buf->data_files[i] = fd_file;
