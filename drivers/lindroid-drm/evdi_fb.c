@@ -257,15 +257,11 @@ struct drm_framebuffer *evdi_fb_user_fb_create(
 {
 	struct drm_gem_object *obj;
 	struct evdi_framebuffer *efb;
-	struct file *memfd_file;
-	struct file *fd_file;
 	int ret;
 	uint32_t size;
 	int bpp = evdi_fb_get_bpp(mode_cmd->pixel_format);
 	uint32_t handle;
-	int version, numFds, numInts, fd;
 	ssize_t bytes_read;
-	struct evdi_add_gralloc_buf *add_gralloc_buf;
 	struct evdi_device *evdi = dev->dev_private;
 
 	size = mode_cmd->offsets[0] + mode_cmd->pitches[0] * mode_cmd->height;
@@ -274,60 +270,6 @@ struct drm_framebuffer *evdi_fb_user_fb_create(
 	if (bpp != 32) {
 		EVDI_ERROR("Unsupported bpp (%d)\n", bpp);
 		return ERR_PTR(-EINVAL);
-	}
-
-	memfd_file = fget(mode_cmd->handles[0]);
-	if (!memfd_file) {
-		printk("Failed to open fake fb: %d\n", mode_cmd->handles[0]);
-		return ERR_PTR(-EINVAL);
-	}
-
-	loff_t pos = 0; // Initialize offset
-	bytes_read = kernel_read(memfd_file, &version, sizeof(version), &pos);
-	if (bytes_read != sizeof(version)) {
-		printk("Failed to read version from memfd, bytes_read=%zd\n", bytes_read);
-		return ERR_PTR(-EIO);
-	}
-
-	bytes_read = kernel_read(memfd_file, &numFds, sizeof(numFds), &pos);
-	if (bytes_read != sizeof(numFds)) {
-		printk("Failed to read numFds from memfd, bytes_read=%zd\n", bytes_read);
-		return ERR_PTR(-EIO);
-	}
-
-	bytes_read = kernel_read(memfd_file, &numInts, sizeof(numInts), &pos);
-	if (bytes_read != sizeof(numInts)) {
-		printk("Failed to read numInts from memfd, bytes_read=%zd\n", bytes_read);
-		return ERR_PTR(-EIO);
-	}
-	add_gralloc_buf = kzalloc(sizeof(struct evdi_add_gralloc_buf), GFP_KERNEL);
-	add_gralloc_buf->memfd_file = memfd_file;
-	add_gralloc_buf->numFds = numFds;
-	add_gralloc_buf->numInts = numInts;
-	add_gralloc_buf->data_ints = kzalloc(sizeof(int)*numInts, GFP_KERNEL);
-	add_gralloc_buf->data_files = kzalloc(sizeof(struct file*)*numFds, GFP_KERNEL);
-
-	printk("Read value from add buf memfd version: %d, numFds: %d, numInts: %d\n", version, numFds, numInts);
-
-	for(int i = 0; i < numFds; i++) {
-		bytes_read = kernel_read(memfd_file, &fd, sizeof(fd), &pos);
-		if (bytes_read != sizeof(fd)) {
-			printk("Failed to read fd from memfd, bytes_read=%zd\n", bytes_read);
-			return ERR_PTR(-EIO);
-		}
-		fd_file = fget(fd);
-		if (!fd_file) {
-			printk("Failed to open fake fb's %d fd file: %d\n", mode_cmd->handles[0], fd);
-			return ERR_PTR(-EINVAL);
-		}
-		add_gralloc_buf->data_files[i] = fd_file;
-
-	}
-
-	bytes_read = kernel_read(memfd_file, add_gralloc_buf->data_ints, sizeof(int) *numInts, &pos);
-	if (bytes_read != sizeof(int) *numInts) {
-		printk("Failed to read ints from memfd, bytes_read=%zd\n", bytes_read);
-		return ERR_PTR(-EIO);
 	}
 
 	evdi_gem_create(file, dev, size, &handle);
@@ -347,24 +289,8 @@ struct drm_framebuffer *evdi_fb_user_fb_create(
 		goto err_no_mem;
 	efb->base.obj[0] = obj;
 
-	mutex_lock(&evdi->poll_lock);
-
-	evdi->poll_event = add_buf;
-	evdi->poll_data = add_gralloc_buf;
-	reinit_completion(&evdi->poll_completion);
-	wake_up(&evdi->poll_ioct_wq);
-
-	ret = wait_for_completion_interruptible(&evdi->poll_completion);
-
-	if (ret < 0) {
-		// Process is likely beeing killed at this point RIP btw :(, so assume there are no more events
-		pr_err("evdi_fb_user_fb_create: Wait interrupted by signal\n");
-		evdi->poll_event = none;
-		mutex_unlock(&evdi->poll_lock);
-		return ERR_PTR(-ret);
-	}
-	printk("evdi_fb_user_fb_create 6 buf id: %d\n", evdi->last_buf_add_id);
-	efb->gralloc_buf_id = evdi->last_buf_add_id;
+	printk("evdi_fb_user_fb_create 6 buf id: %d\n", mode_cmd->handles[0]);
+	efb->gralloc_buf_id = mode_cmd->handles[0];
 	ret = evdi_framebuffer_init(dev, efb, mode_cmd, to_evdi_bo(obj));
 	mutex_unlock(&evdi->poll_lock);
 	if (ret)

@@ -125,6 +125,10 @@ struct drm_evdi_swap_callabck {
 	int poll_id;
 };
 
+struct drm_evdi_gbm_add_buf {
+	int fd;
+	int id;
+};
 /* Input ioctls from evdi lib to driver */
 #define DRM_EVDI_CONNECT          0x00
 #define DRM_EVDI_REQUEST_UPDATE   0x01
@@ -134,6 +138,7 @@ struct drm_evdi_swap_callabck {
 #define DRM_EVDI_ADD_BUFF_CALLBACK 0x06
 #define DRM_EVDI_DESTROY_BUFF_CALLBACK 0x07
 #define DRM_EVDI_SWAP_CALLBACK 0x08
+#define DRM_EVDI_GBM_ADD_BUFF 0x09
 /* LAST_IOCTL 0x5F -- 96 driver specific ioctls to use */
 
 #define DRM_IOCTL_EVDI_CONNECT DRM_IOWR(DRM_COMMAND_BASE +  \
@@ -152,5 +157,7 @@ struct drm_evdi_swap_callabck {
 	DRM_EVDI_DESTROY_BUFF_CALLBACK, struct drm_evdi_destroy_buff_callabck)
 #define DRM_IOCTL_EVDI_SWAP_CALLBACK DRM_IOWR(DRM_COMMAND_BASE +  \
 	DRM_EVDI_SWAP_CALLBACK, struct drm_evdi_swap_callabck)
+#define DRM_IOCTL_EVDI_GBM_ADD_BUFF DRM_IOWR(DRM_COMMAND_BASE +  \
+	DRM_EVDI_GBM_ADD_BUFF, struct drm_evdi_gbm_add_buf)
 
 #endif /* __EVDI_UAPI_DRM_H__ */

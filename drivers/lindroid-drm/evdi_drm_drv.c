@@ -49,6 +49,10 @@ int evdi_add_buff_callback_ioctl(struct drm_device *drm_dev, void *data,
 int evdi_destroy_buff_callback_ioctl(struct drm_device *drm_dev, void *data,
                     struct drm_file *file);
 
+int evdi_gbm_add_buf_ioctl(
+					struct drm_device *dev,
+					void *data,
+					struct drm_file *file);
 struct drm_ioctl_desc evdi_painter_ioctls[] = {
 	DRM_IOCTL_DEF_DRV(EVDI_CONNECT, evdi_painter_connect_ioctl, EVDI_DRM_UNLOCKED),
 	DRM_IOCTL_DEF_DRV(EVDI_REQUEST_UPDATE, evdi_painter_request_update_ioctl, EVDI_DRM_UNLOCKED),
@@ -58,6 +62,7 @@ struct drm_ioctl_desc evdi_painter_ioctls[] = {
 	DRM_IOCTL_DEF_DRV(EVDI_SWAP_CALLBACK, evdi_swap_callback_ioctl, EVDI_DRM_UNLOCKED),
 	DRM_IOCTL_DEF_DRV(EVDI_ADD_BUFF_CALLBACK, evdi_add_buff_callback_ioctl, EVDI_DRM_UNLOCKED),
 	DRM_IOCTL_DEF_DRV(EVDI_DESTROY_BUFF_CALLBACK, evdi_destroy_buff_callback_ioctl, EVDI_DRM_UNLOCKED),
+	DRM_IOCTL_DEF_DRV(EVDI_GBM_ADD_BUFF, evdi_gbm_add_buf_ioctl, EVDI_DRM_UNLOCKED),
 };
 
 #if KERNEL_VERSION(5, 11, 0) <= LINUX_VERSION_CODE || defined(EL8)
@@ -187,6 +192,111 @@ int evdi_destroy_buff_callback_ioctl(struct drm_device *drm_dev, void *data,
 	struct evdi_device *evdi = drm_dev->dev_private;
 	complete(&evdi->poll_completion);
 	return 0;
+}
+
+int evdi_gbm_add_buf_ioctl(
+					struct drm_device *dev,
+					void *data,
+					struct drm_file *file)
+{
+	struct drm_gem_object *obj;
+	struct evdi_framebuffer *efb;
+	struct file *memfd_file;
+	struct file *fd_file;
+	int ret;
+	uint32_t handle;
+	int version, numFds, numInts, fd;
+	ssize_t bytes_read;
+	struct evdi_add_gralloc_buf *add_gralloc_buf;
+	struct evdi_device *evdi = dev->dev_private;
+	struct drm_evdi_gbm_add_buf *cmd = data;
+
+	memfd_file = fget(cmd->fd);
+	if (!memfd_file) {
+		printk("Failed to open fake fb: %d\n", cmd->fd);
+		return -EINVAL;
+	}
+
+	loff_t pos = 0; // Initialize offset
+	bytes_read = kernel_read(memfd_file, &version, sizeof(version), &pos);
+	if (bytes_read != sizeof(version)) {
+		printk("Failed to read version from memfd, bytes_read=%zd\n", bytes_read);
+		return -EIO;
+	}
+
+	bytes_read = kernel_read(memfd_file, &numFds, sizeof(numFds), &pos);
+	if (bytes_read != sizeof(numFds)) {
+		printk("Failed to read numFds from memfd, bytes_read=%zd\n", bytes_read);
+		return -EIO;
+	}
+
+	bytes_read = kernel_read(memfd_file, &numInts, sizeof(numInts), &pos);
+	if (bytes_read != sizeof(numInts)) {
+		printk("Failed to read numInts from memfd, bytes_read=%zd\n", bytes_read);
+		return -EIO;
+	}
+	add_gralloc_buf = kzalloc(sizeof(struct evdi_add_gralloc_buf), GFP_KERNEL);
+	add_gralloc_buf->memfd_file = memfd_file;
+	add_gralloc_buf->numFds = numFds;
+	add_gralloc_buf->numInts = numInts;
+	add_gralloc_buf->data_ints = kzalloc(sizeof(int)*numInts, GFP_KERNEL);
+	add_gralloc_buf->data_files = kzalloc(sizeof(struct file*)*numFds, GFP_KERNEL);
+
+	printk("Read value from add buf memfd version: %d, numFds: %d, numInts: %d\n", version, numFds, numInts);
+
+	for(int i = 0; i < numFds; i++) {
+		bytes_read = kernel_read(memfd_file, &fd, sizeof(fd), &pos);
+		if (bytes_read != sizeof(fd)) {
+			printk("Failed to read fd from memfd, bytes_read=%zd\n", bytes_read);
+			return -EIO;
+		}
+		fd_file = fget(fd);
+		if (!fd_file) {
+			printk("Failed to open fake fb's %d fd file: %d\n", cmd->fd, fd);
+			return -EINVAL;
+		}
+		add_gralloc_buf->data_files[i] = fd_file;
+
+	}
+
+	bytes_read = kernel_read(memfd_file, add_gralloc_buf->data_ints, sizeof(int) *numInts, &pos);
+	if (bytes_read != sizeof(int) *numInts) {
+		printk("Failed to read ints from memfd, bytes_read=%zd\n", bytes_read);
+		return -EIO;
+	}
+
+	printk("evdi_gbm_add_buf_ioctl 4\n");
+
+	mutex_lock(&evdi->poll_lock);
+
+	evdi->poll_event = add_buf;
+	evdi->poll_data = add_gralloc_buf;
+	reinit_completion(&evdi->poll_completion);
+	wake_up(&evdi->poll_ioct_wq);
+
+	ret = wait_for_completion_interruptible(&evdi->poll_completion);
+
+	if (ret < 0) {
+		// Process is likely beeing killed at this point RIP btw :(, so assume there are no more events
+		pr_err("evdi_gbm_add_buf_ioctl: Wait interrupted by signal\n");
+		evdi->poll_event = none;
+		mutex_unlock(&evdi->poll_lock);
+		return ret;
+	}
+	printk("evdi_gbm_add_buf_ioctl 6 buf id: %d\n", evdi->last_buf_add_id);
+	mutex_unlock(&evdi->poll_lock);
+	if (ret)
+		goto err_inval;
+	cmd->id = evdi->last_buf_add_id;
+	return 0;
+
+ err_no_mem:
+	drm_gem_object_put(obj);
+	return -ENOMEM;
+ err_inval:
+	kfree(efb);
+	drm_gem_object_put(obj);
+	return -EINVAL;
 }
 
 int evdi_poll_ioctl(struct drm_device *drm_dev, void *data,
