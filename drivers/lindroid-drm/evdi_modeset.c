@@ -229,25 +229,30 @@ int evdi_atomic_helper_page_flip(struct drm_crtc *crtc,
 	struct evdi_framebuffer *efb = evdi->painter->scanout_fb;
 	int ret;
 
-	mutex_lock(&evdi->poll_lock);
-
 	printk("evdi_atomic_helper_page_flip to: %d\n", efb->gralloc_buf_id);
 
-	evdi->poll_event = swap_to;
-	evdi->poll_data = &efb->gralloc_buf_id;
-	reinit_completion(&evdi->poll_completion);
+	struct evdi_event *ev_event = evdi_create_event(evdi, swap_to, &efb->gralloc_buf_id);
+	if (!ev_event)
+		return -ENOMEM;
+
 	wake_up(&evdi->poll_ioct_wq);
-
-	ret = wait_for_completion_interruptible(&evdi->poll_completion);
-
+	ret = wait_event_interruptible(ev_event->wait, ev_event->completed);
 	if (ret < 0) {
-		// Process is likely beeing killed at this point RIP btw :(, so assume there are no more events
-		pr_err("evdi_atomic_helper_page_flip: Wait interrupted by signal\n");
-		evdi->poll_event = none;
-		mutex_unlock(&evdi->poll_lock);
+		printk("evdi_gbm_add_buf_ioctl: wait_event_interruptible interrupted: %d\n", ret);
 		return ret;
 	}
-	mutex_unlock(&evdi->poll_lock);
+
+	ret = ev_event->result;
+	if (ret < 0) {
+		pr_err("evdi_gbm_add_buf_ioctl: user ioctl failled\n");
+		return ret;
+	}
+
+	mutex_lock(&evdi->event_lock);
+	idr_remove(&evdi->event_idr, ev_event->poll_id);
+	mutex_unlock(&evdi->event_lock);
+	kfree(ev_event);
+
 	evdi_painter_send_vblank(evdi->painter);
 
 	return drm_atomic_helper_page_flip(crtc, fb, event, flags, ctx);

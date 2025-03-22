@@ -189,25 +189,29 @@ static void evdi_user_framebuffer_destroy(struct drm_framebuffer *fb)
 #endif
 	drm_framebuffer_cleanup(fb);
 
-	mutex_lock(&evdi->poll_lock);
+	printk("evdi_user_framebuffer_destroy id: %d\n", efb->gralloc_buf_id);
 
-	printk("evdi_user_framebuffer_create_handle id: %d\n", efb->gralloc_buf_id);
+	struct evdi_event *event = evdi_create_event(evdi, destroy_buf, &efb->gralloc_buf_id);
+	if (!event)
+		return;
 
-	evdi->poll_event = destroy_buf;
-	evdi->poll_data = &efb->gralloc_buf_id;
-	reinit_completion(&evdi->poll_completion);
 	wake_up(&evdi->poll_ioct_wq);
-
-	ret = wait_for_completion_interruptible(&evdi->poll_completion);
-
+	ret = wait_event_interruptible(event->wait, event->completed);
 	if (ret < 0) {
-		// Process is likely beeing killed at this point RIP btw :(, so assume there are no more events
-		pr_err("evdi_user_framebuffer_destroy: Wait interrupted by signal\n");
-		evdi->poll_event = none;
-		mutex_unlock(&evdi->poll_lock);
+		printk("evdi_gbm_add_buf_ioctl: wait_event_interruptible interrupted: %d\n", ret);
 		return;
 	}
-	mutex_unlock(&evdi->poll_lock);
+
+	ret = event->result;
+	if (ret < 0) {
+		pr_err("evdi_gbm_add_buf_ioctl: user ioctl failled\n");
+		return;
+	}
+
+	mutex_lock(&evdi->event_lock);
+	idr_remove(&evdi->event_idr, event->poll_id);
+	mutex_unlock(&evdi->event_lock);
+	kfree(event);
 
 	kfree(efb);
 }
@@ -289,10 +293,26 @@ struct drm_framebuffer *evdi_fb_user_fb_create(
 		goto err_no_mem;
 	efb->base.obj[0] = obj;
 
-	printk("evdi_fb_user_fb_create 6 buf id: %d\n", mode_cmd->handles[0]);
-	efb->gralloc_buf_id = mode_cmd->handles[0];
+	struct file *memfd_file;
+	int id;
+
+	memfd_file = fget(mode_cmd->handles[0]);
+	if (!memfd_file) {
+		printk("Failed to open fake fb: %d\n", mode_cmd->handles[0]);
+		return ERR_PTR(-EINVAL);
+	}
+
+	loff_t pos = 0;
+	bytes_read = kernel_read(memfd_file, &id, sizeof(id), &pos);
+	if (bytes_read != sizeof(id)) {
+		printk("Failed to read id from memfd, bytes_read=%zd\n", bytes_read);
+		return ERR_PTR(-EIO);
+	}
+
+	printk("evdi_fb_user_fb_create 6 buf id: %d\n", id);
+	efb->gralloc_buf_id = id;
 	ret = evdi_framebuffer_init(dev, efb, mode_cmd, to_evdi_bo(obj));
-	mutex_unlock(&evdi->poll_lock);
+
 	if (ret)
 		goto err_inval;
 	return &efb->base;

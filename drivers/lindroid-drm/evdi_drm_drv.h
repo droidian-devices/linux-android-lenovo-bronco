@@ -64,6 +64,24 @@ struct evdi_device {
 	struct mutex poll_lock;
 	struct completion poll_completion;
 	int last_buf_add_id;
+	void *last_got_buff;
+	struct mutex event_lock;
+	struct list_head event_queue;
+	struct idr event_idr;
+	atomic_t next_event_id;
+};
+
+struct evdi_event {
+	enum poll_event_type type;
+	void *data;
+	void *reply_data;
+	int poll_id;
+	wait_queue_head_t wait;
+	bool completed;
+	int result;
+
+	struct list_head list;
+	struct evdi_device *evdi;
 };
 
 struct evdi_gem_object {
@@ -116,17 +134,26 @@ struct evdi_painter {
 	int fg_console;
 };
 
-struct evdi_add_gralloc_buf {
-	struct file *memfd_file;
+struct evdi_gralloc_buf {
 	int version;
 	int numFds;
 	int numInts;
 	struct file **data_files;
 	int *data_ints;
+	struct file *memfd_file;
+};
+
+struct evdi_gralloc_buf_user {
+	int version;
+	int numFds;
+	int numInts;
+	int data[128];
 };
 
 #define to_evdi_fb(x) container_of(x, struct evdi_framebuffer, base)
 
+
+struct evdi_event *evdi_create_event(struct evdi_device *evdi, enum poll_event_type type, void *data);
 
 int evdi_poll_ioctl(struct drm_device *drm_dev, void *data,
                     struct drm_file *file);
