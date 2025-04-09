@@ -539,6 +539,7 @@ int evdi_poll_ioctl(struct drm_device *drm_dev, void *data,
 
 	switch(cmd->event) {
 		case add_buf:
+			{
 			struct evdi_gralloc_buf *add_gralloc_buf = event->data;
 			fd = get_unused_fd_flags(O_RDWR);
 			if (fd < 0) {
@@ -566,6 +567,7 @@ int evdi_poll_ioctl(struct drm_device *drm_dev, void *data,
 				return -EFAULT;
 			}
 			break;
+			}
 		case get_buf:
 		case swap_to:
 		case destroy_buf:
