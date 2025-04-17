@@ -251,13 +251,28 @@ const char *kgsl_context_type(int type)
 	return "ANY";
 }
 
-/* Scheduled by kgsl_mem_entry_put_deferred() */
-static void _deferred_put(struct work_struct *work)
+/* Scheduled by kgsl_mem_entry_destroy_deferred() */
+static void _deferred_destroy(struct work_struct *work)
 {
 	struct kgsl_mem_entry *entry =
 		container_of(work, struct kgsl_mem_entry, work);
 
-	kgsl_mem_entry_put(entry);
+	kgsl_mem_entry_destroy(&entry->refcount);
+}
+
+static void kgsl_mem_entry_destroy_deferred(struct kref *kref)
+{
+	struct kgsl_mem_entry *entry =
+		container_of(kref, struct kgsl_mem_entry, refcount);
+
+	INIT_WORK(&entry->work, _deferred_destroy);
+	queue_work(kgsl_driver.lockless_workqueue, &entry->work);
+}
+
+void kgsl_mem_entry_put_deferred(struct kgsl_mem_entry *entry)
+{
+	if (entry)
+		kref_put(&entry->refcount, kgsl_mem_entry_destroy_deferred);
 }
 
 static struct kgsl_mem_entry *kgsl_mem_entry_create(void)
@@ -672,11 +687,11 @@ int kgsl_context_init(struct kgsl_device_private *dev_priv,
 	if (id == -ENOSPC) {
 		/*
 		 * Before declaring that there are no contexts left try
-		 * flushing the event workqueue just in case there are
+		 * flushing the event worker just in case there are
 		 * detached contexts waiting to finish
 		 */
 
-		flush_workqueue(device->events_wq);
+		kthread_flush_worker(device->events_worker);
 		id = _kgsl_get_context_id(device);
 	}
 
@@ -2574,7 +2589,7 @@ static void gpumem_free_func(struct kgsl_device *device,
 			entry->memdesc.gpuaddr, entry->memdesc.size,
 			entry->memdesc.flags);
 
-	kgsl_mem_entry_put(entry);
+	kgsl_mem_entry_put_deferred(entry);
 }
 
 static long gpumem_free_entry_on_timestamp(struct kgsl_device *device,
@@ -2671,8 +2686,7 @@ static bool gpuobj_free_fence_func(void *priv)
 			entry->memdesc.gpuaddr, entry->memdesc.size,
 			entry->memdesc.flags);
 
-	INIT_WORK(&entry->work, _deferred_put);
-	queue_work(kgsl_driver.lockless_workqueue, &entry->work);
+	kgsl_mem_entry_put_deferred(entry);
 	return true;
 }
 
@@ -5130,14 +5144,15 @@ int kgsl_device_platform_probe(struct kgsl_device *device)
 	if (status)
 		goto error;
 
-	device->events_wq = alloc_workqueue("kgsl-events",
-		WQ_UNBOUND | WQ_MEM_RECLAIM | WQ_SYSFS | WQ_HIGHPRI, 0);
+	device->events_worker = kthread_create_worker(0, "kgsl-events");
 
-	if (!device->events_wq) {
-		dev_err(device->dev, "Failed to allocate events workqueue\n");
-		status = -ENOMEM;
+	if (IS_ERR(device->events_worker)) {
+		status = PTR_ERR(device->events_worker);
+		dev_err(device->dev, "Failed to create events worker ret=%d\n", status);
 		goto error_pwrctrl_close;
 	}
+
+	sched_set_fifo(device->events_worker->task);
 
 	status = kgsl_reclaim_init();
 	if (status)
@@ -5166,10 +5181,8 @@ int kgsl_device_platform_probe(struct kgsl_device *device)
 	return 0;
 
 error_pwrctrl_close:
-	if (device->events_wq) {
-		destroy_workqueue(device->events_wq);
-		device->events_wq = NULL;
-	}
+	if (!IS_ERR(device->events_worker))
+		kthread_destroy_worker(device->events_worker);
 
 	kgsl_pwrctrl_close(device);
 error:
@@ -5181,10 +5194,7 @@ void kgsl_device_platform_remove(struct kgsl_device *device)
 {
 	del_timer(&device->work_period_timer);
 
-	if (device->events_wq) {
-		destroy_workqueue(device->events_wq);
-		device->events_wq = NULL;
-	}
+	kthread_destroy_worker(device->events_worker);
 
 	kgsl_device_snapshot_close(device);
 

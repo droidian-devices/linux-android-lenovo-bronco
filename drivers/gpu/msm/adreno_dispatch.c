@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2013-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2023,2025 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/slab.h>
@@ -606,10 +606,18 @@ static int sendcmd(struct adreno_device *adreno_dev,
 	struct submission_info info = {0};
 #endif
 
+	int is_current_rt = rt_task(current);
+	int nice = task_nice(current);
+
 	mutex_lock(&device->mutex);
+
+	/* Elevating thread’s priority to avoid context switch with holding device mutex */
+	if (!is_current_rt)
+		sched_set_fifo(current);
+
 	if (adreno_gpu_halt(adreno_dev) != 0) {
-		mutex_unlock(&device->mutex);
-		return -EBUSY;
+		ret = -EBUSY;
+		goto err;
 	}
 
 #ifdef CONFIG_QCOM_KGSL_DEBUG
@@ -626,8 +634,7 @@ static int sendcmd(struct adreno_device *adreno_dev,
 		if (ret) {
 			dispatcher->inflight--;
 			dispatch_q->inflight--;
-			mutex_unlock(&device->mutex);
-			return ret;
+			goto err;
 		}
 
 		set_bit(ADRENO_DISPATCHER_POWER, &dispatcher->priv);
@@ -681,8 +688,6 @@ static int sendcmd(struct adreno_device *adreno_dev,
 
 		process_rt_bus_hint(device, false);
 
-		mutex_unlock(&device->mutex);
-
 		/*
 		 * Don't log a message in case of:
 		 * -ENOENT means that the context was detached before the
@@ -696,7 +701,7 @@ static int sendcmd(struct adreno_device *adreno_dev,
 			dev_err(device->dev,
 				     "Unable to submit command to the ringbuffer %d\n",
 				     ret);
-		return ret;
+		goto err;
 	}
 
 #ifdef CONFIG_QCOM_KGSL_DEBUG
@@ -737,6 +742,9 @@ static int sendcmd(struct adreno_device *adreno_dev,
 		context->priority, drawobj->flags);
 #endif
 
+	if (!is_current_rt)
+		sched_set_normal(current, nice);
+
 	mutex_unlock(&device->mutex);
 
 #ifdef CONFIG_QCOM_KGSL_DEBUG
@@ -765,6 +773,11 @@ static int sendcmd(struct adreno_device *adreno_dev,
 	if (gpudev->preemption_schedule)
 		gpudev->preemption_schedule(adreno_dev);
 	return 0;
+err:
+	if (!is_current_rt)
+		sched_set_normal(current, nice);
+	mutex_unlock(&device->mutex);
+	return ret;
 }
 
 /**
