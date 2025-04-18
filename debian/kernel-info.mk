@@ -8,7 +8,7 @@
 VARIANT = android
 
 # Kernel base version
-KERNEL_BASE_VERSION = 5.10.205
+KERNEL_BASE_VERSION = 5.10.226
 
 # The kernel cmdline to use
 KERNEL_BOOTIMAGE_CMDLINE = 
@@ -182,6 +182,13 @@ BUILD_CC = aarch64-linux-gnu-gcc
 
 # Set to 1 to skip modules packaging if CONFIG_MODULES is disabled in defconfig 
 BUILD_SKIP_MODULES = 1
+
+# Set clang version
+CLANG_VERSION = 12.0-r416183b
+
+# Set to 1 to use a manually installed toolchain
+# Remember to update the path in BUILD_PATH
+CLANG_CUSTOM = 0
 
 # Extra paths to prepend to the PATH variable. You'll probably want
 # to specify the clang path here (the default).
