@@ -4,6 +4,7 @@ Priority: optional
 Maintainer: Droidian porters <info@droidian.org>
 XS-Droidian-Host-Arch: arm64
 XS-Droidian-Build-On: amd64
+XS-Droidian-Extra-Repos: deb http://droidian-linux-packaging-snippets.repo.droidian.org/next-vendor-boot/ trixie main
 Build-Depends: build-essential,
                dpkg-dev,
                findutils,
