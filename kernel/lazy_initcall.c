@@ -98,6 +98,14 @@ static const __initconst char * const blacklist[] = {
 	"hdcp_qseecom",
 	"qti_battery_charger",
 	"qti_battery_charger_main",
+
+	//Ignore =y
+	"ssusb_redriver_ps5169",
+	"dwc3_msm",
+	"qca6490",
+
+	//fails with: unknown parameter
+	"fsa4480_i2c",
 	
 	NULL
 };
