@@ -3485,7 +3485,7 @@ static int sd_probe(struct device *dev)
 	}
 
 	blk_pm_runtime_init(sdp->request_queue, dev);
-	if (sdp->rpm_autosuspend) {
+	if (sdp->rpm_autosuspend && sdp->removable) {
 		pm_runtime_set_autosuspend_delay(dev,
 			sdp->host->hostt->rpm_autosuspend_delay);
 	}
@@ -3502,7 +3502,7 @@ static int sd_probe(struct device *dev)
 	}
 
 	sd_printk(KERN_NOTICE, sdkp, "Attached SCSI %sdisk\n",
-		  sdp->removable ? "removable " : "");
+		  sdp->removable ? "removable " : "not removable ");
 	scsi_autopm_put_device(sdp);
 
 	return 0;
