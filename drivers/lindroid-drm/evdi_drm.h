@@ -30,7 +30,8 @@ enum poll_event_type {
   add_buf,
   get_buf,
   destroy_buf,
-  swap_to
+  swap_to,
+  create_buf
 };
 
 struct drm_evdi_event_update_ready {
@@ -135,6 +136,12 @@ struct drm_evdi_swap_callabck {
 	int poll_id;
 };
 
+struct drm_evdi_create_buff_callabck {
+	int poll_id;
+	int id;
+	uint32_t stride;
+};
+
 struct drm_evdi_gbm_add_buf {
 	int fd;
 	int id;
@@ -142,6 +149,14 @@ struct drm_evdi_gbm_add_buf {
 
 struct drm_evdi_gbm_del_buff {
 	int id;
+};
+
+struct drm_evdi_gbm_create_buff {
+	int *id;
+	uint32_t *stride;
+	uint32_t format;
+	uint32_t width;
+	uint32_t height;
 };
 
 struct drm_evdi_gbm_get_buff {
@@ -162,6 +177,8 @@ struct drm_evdi_gbm_get_buff {
 #define DRM_EVDI_DESTROY_BUFF_CALLBACK 0x09
 #define DRM_EVDI_SWAP_CALLBACK 0x0A
 #define DRM_EVDI_GBM_DEL_BUFF 0x0B
+#define DRM_EVDI_GBM_CREATE_BUFF 0x0C
+#define DRM_EVDI_GBM_CREATE_BUFF_CALLBACK 0x0D
 
 /* LAST_IOCTL 0x5F -- 96 driver specific ioctls to use */
 
@@ -181,6 +198,10 @@ struct drm_evdi_gbm_get_buff {
 	DRM_EVDI_GBM_GET_BUFF, struct drm_evdi_gbm_get_buff)
 #define DRM_IOCTL_EVDI_GBM_DEL_BUFF DRM_IOWR(DRM_COMMAND_BASE +  \
 	DRM_EVDI_GBM_DEL_BUFF, struct drm_evdi_gbm_del_buff)
+#define DRM_IOCTL_EVDI_GBM_CREATE_BUFF DRM_IOWR(DRM_COMMAND_BASE +  \
+	DRM_EVDI_GBM_CREATE_BUFF, struct drm_evdi_gbm_create_buff)
+#define DRM_IOCTL_EVDI_GBM_CREATE_BUFF_CALLBACK DRM_IOWR(DRM_COMMAND_BASE +  \
+	DRM_EVDI_GBM_CREATE_BUFF_CALLBACK, struct drm_evdi_create_buff_callabck)
 #define DRM_IOCTL_EVDI_ADD_BUFF_CALLBACK DRM_IOWR(DRM_COMMAND_BASE +  \
 	DRM_EVDI_ADD_BUFF_CALLBACK, struct drm_evdi_add_buff_callabck)
 #define DRM_IOCTL_EVDI_GET_BUFF_CALLBACK DRM_IOWR(DRM_COMMAND_BASE +  \

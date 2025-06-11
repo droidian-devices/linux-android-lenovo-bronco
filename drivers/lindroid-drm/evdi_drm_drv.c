@@ -63,6 +63,12 @@ int evdi_gbm_get_buf_ioctl(struct drm_device *dev, void *data,
 int evdi_gbm_del_buf_ioctl(struct drm_device *dev, void *data,
 					struct drm_file *file);
 
+int evdi_gbm_create_buff(struct drm_device *dev, void *data,
+					struct drm_file *file);
+
+int evdi_create_buff_callback_ioctl(struct drm_device *drm_dev, void *data,
+                    struct drm_file *file);
+
 struct drm_ioctl_desc evdi_painter_ioctls[] = {
 	DRM_IOCTL_DEF_DRV(EVDI_CONNECT, evdi_painter_connect_ioctl, EVDI_DRM_UNLOCKED),
 	DRM_IOCTL_DEF_DRV(EVDI_REQUEST_UPDATE, evdi_painter_request_update_ioctl, EVDI_DRM_UNLOCKED),
@@ -76,6 +82,8 @@ struct drm_ioctl_desc evdi_painter_ioctls[] = {
 	DRM_IOCTL_DEF_DRV(EVDI_GBM_ADD_BUFF, evdi_gbm_add_buf_ioctl, EVDI_DRM_UNLOCKED),
 	DRM_IOCTL_DEF_DRV(EVDI_GBM_GET_BUFF, evdi_gbm_get_buf_ioctl, EVDI_DRM_UNLOCKED),
 	DRM_IOCTL_DEF_DRV(EVDI_GBM_DEL_BUFF, evdi_gbm_del_buf_ioctl, EVDI_DRM_UNLOCKED),
+	DRM_IOCTL_DEF_DRV(EVDI_GBM_CREATE_BUFF, evdi_gbm_create_buff, EVDI_DRM_UNLOCKED),
+	DRM_IOCTL_DEF_DRV(EVDI_GBM_CREATE_BUFF_CALLBACK, evdi_create_buff_callback_ioctl, EVDI_DRM_UNLOCKED),
 };
 
 #if KERNEL_VERSION(5, 11, 0) <= LINUX_VERSION_CODE || defined(EL8)
@@ -294,7 +302,29 @@ int evdi_destroy_buff_callback_ioctl(struct drm_device *drm_dev, void *data,
 	struct evdi_device *evdi = drm_dev->dev_private;
 	struct drm_evdi_add_buff_callabck *cmd = data;
 	struct evdi_event *event;
+	mutex_lock(&evdi->event_lock);
+	event = idr_find(&evdi->event_idr, cmd->poll_id);
+	mutex_unlock(&evdi->event_lock);
+	if (!event) {
+		printk("evdi_destroy_buff_callback_ioctl: event is null\n");
+		return -EINVAL;
+	}
 
+	event->result = 0;
+	event->completed = true;
+	wake_up(&event->wait);
+	return 0;
+}
+
+int evdi_create_buff_callback_ioctl(struct drm_device *drm_dev, void *data,
+                    struct drm_file *file)
+{
+	struct evdi_device *evdi = drm_dev->dev_private;
+	struct drm_evdi_create_buff_callabck *cmd = data;
+	struct evdi_event *event;
+	printk("evdi_create_buff_callback_ioctl hi, id %d\n", cmd->id);
+	struct drm_evdi_create_buff_callabck *buf = kzalloc(sizeof(struct drm_evdi_create_buff_callabck), GFP_KERNEL);
+	memcpy(buf, data, sizeof(struct drm_evdi_create_buff_callabck));
 	mutex_lock(&evdi->event_lock);
 	event = idr_find(&evdi->event_idr, cmd->poll_id);
 	mutex_unlock(&evdi->event_lock);
@@ -304,6 +334,7 @@ int evdi_destroy_buff_callback_ioctl(struct drm_device *drm_dev, void *data,
 
 	event->result = 0;
 	event->completed = true;
+	event->reply_data = buf;
 	wake_up(&event->wait);
 	return 0;
 }
@@ -497,6 +528,40 @@ int evdi_gbm_del_buf_ioctl(struct drm_device *dev, void *data,
 	return 0;
 }
 
+int evdi_gbm_create_buff (struct drm_device *dev, void *data,
+					struct drm_file *file)
+{
+	struct drm_evdi_gbm_create_buff *cmd = data;
+	struct evdi_device *evdi = dev->dev_private;
+	int ret;
+	struct evdi_event *event = evdi_create_event(evdi, create_buf, cmd);
+	if (!event)
+		return -ENOMEM;
+
+	wake_up(&evdi->poll_ioct_wq);
+	ret = wait_event_interruptible(event->wait, event->completed);
+	if (ret < 0) {
+		printk("evdi_gbm_create_buff: wait_event_interruptible interrupted: %d\n", ret);
+		return ret;
+	}
+
+	ret = event->result;
+	if (ret < 0) {
+		pr_err("evdi_gbm_create_buff: user ioctl failled\n");
+		return ret;
+	}
+
+	struct drm_evdi_create_buff_callabck *cb_cmd = (struct drm_evdi_create_buff_callabck *)event->reply_data;
+	copy_to_user(cmd->id, &cb_cmd->id, sizeof(int));
+	copy_to_user(cmd->stride, &cb_cmd->stride, sizeof(int));
+	mutex_lock(&evdi->event_lock);
+	idr_remove(&evdi->event_idr, event->poll_id);
+	mutex_unlock(&evdi->event_lock);
+	kfree(event);
+
+	return 0;
+}
+
 int evdi_poll_ioctl(struct drm_device *drm_dev, void *data,
                     struct drm_file *file)
 {
@@ -568,6 +633,9 @@ int evdi_poll_ioctl(struct drm_device *drm_dev, void *data,
 			}
 			break;
 			}
+		case create_buf:
+			copy_to_user(cmd->data, event->data, sizeof(struct drm_evdi_gbm_create_buff));
+			break;
 		case get_buf:
 		case swap_to:
 		case destroy_buf:
