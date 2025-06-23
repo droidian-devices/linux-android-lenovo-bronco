@@ -72,7 +72,6 @@ static void evdi_crtc_atomic_flush(
 #endif
 	)
 {
-	printk("evdi_crtc_atomic_flush\n");
 #if KERNEL_VERSION(5, 11, 0) <= LINUX_VERSION_CODE || defined(RPI) || defined(EL8)
 	struct drm_crtc_state *crtc_state = drm_atomic_get_new_crtc_state(state, crtc);
 #else
@@ -93,7 +92,6 @@ static void evdi_crtc_atomic_flush(
 	evdi_painter_set_vblank(evdi->painter, crtc, crtc_state->event);
 	evdi_painter_send_update_ready_if_needed(evdi->painter);
 	struct evdi_framebuffer *efb = evdi->painter->scanout_fb;
-	printk("evdi_atomic_helper_page_flip\n");
 //	int ret = wait_event_interruptible(evdi->poll_response_ioct_wq, !evdi->poll_done);
 
 //	if (ret < 0) {
@@ -114,7 +112,6 @@ static void evdi_mark_full_screen_dirty(struct evdi_device *evdi)
 {
 	const struct drm_clip_rect rect =
 		evdi_painter_framebuffer_size(evdi->painter);
-	printk("evdi_mark_full_screen_dirty\n");
 	evdi_painter_mark_dirty(evdi, &rect);
 	evdi_painter_send_update_ready_if_needed(evdi->painter);
 }
@@ -229,8 +226,6 @@ int evdi_atomic_helper_page_flip(struct drm_crtc *crtc,
 	struct evdi_framebuffer *efb = evdi->painter->scanout_fb;
 	int ret;
 
-	printk("evdi_atomic_helper_page_flip to: %d\n", efb->gralloc_buf_id);
-
 	struct evdi_event *ev_event = evdi_create_event(evdi, swap_to, &efb->gralloc_buf_id);
 	if (!ev_event)
 		return -ENOMEM;
@@ -299,7 +294,6 @@ static void evdi_plane_atomic_update(struct drm_plane *plane,
 	struct drm_rect rect;
 	struct drm_clip_rect clip_rect;
 #endif
-printk("evdi_plane_atomic_update\n");
 	if (!plane || !plane->state) {
 		EVDI_WARN("Plane state is null\n");
 		return;

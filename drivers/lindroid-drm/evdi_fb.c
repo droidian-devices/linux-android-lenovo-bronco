@@ -189,8 +189,6 @@ static void evdi_user_framebuffer_destroy(struct drm_framebuffer *fb)
 #endif
 	drm_framebuffer_cleanup(fb);
 
-	printk("evdi_user_framebuffer_destroy id: %d\n", efb->gralloc_buf_id);
-
 	struct evdi_event *event = evdi_create_event(evdi, destroy_buf, &efb->gralloc_buf_id);
 	if (!event)
 		return;
@@ -220,7 +218,6 @@ static void evdi_user_framebuffer_destroy(struct drm_framebuffer *fb)
 		     struct drm_file *file_priv, unsigned flags,
 		     unsigned color, struct drm_clip_rect *clips,
 		     unsigned num_clips){
-				 printk("evdi_atomic_helper_dirtyfb\n");
 				 return 0;
 			}
 
@@ -280,14 +277,12 @@ struct drm_framebuffer *evdi_fb_user_fb_create(
 	obj = drm_gem_object_lookup(file, handle);
 	if (obj == NULL)
 		return ERR_PTR(-ENOENT);
-	printk("evdi_fb_user_fb_create 4\n");
 	if (size > obj->size) {
 		DRM_ERROR("object size not sufficient for fb %d %zu %u %d %d\n",
 			  size, obj->size, mode_cmd->offsets[0],
 			  mode_cmd->pitches[0], mode_cmd->height);
 		goto err_no_mem;
 	}
-	printk("evdi_fb_user_fb_create 5\n");
 	efb = kzalloc(sizeof(*efb), GFP_KERNEL);
 	if (efb == NULL)
 		goto err_no_mem;
@@ -309,7 +304,6 @@ struct drm_framebuffer *evdi_fb_user_fb_create(
 		return ERR_PTR(-EIO);
 	}
 
-	printk("evdi_fb_user_fb_create 6 buf id: %d\n", id);
 	efb->gralloc_buf_id = id;
 	ret = evdi_framebuffer_init(dev, efb, mode_cmd, to_evdi_bo(obj));
 

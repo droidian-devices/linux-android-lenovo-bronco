@@ -249,7 +249,6 @@ int evdi_add_buff_callback_ioctl(struct drm_device *drm_dev, void *data,
 	int *buff_id_ptr = kzalloc(sizeof(int), GFP_KERNEL);
 	*buff_id_ptr = cmd->buff_id;
 	event->reply_data = buff_id_ptr;
-	printk("evdi_add_buff_callback_ioctl go id: %d for poll_id: %d ptr: %d\n", cmd->buff_id, cmd->poll_id, event->reply_data);
 	event->result = 0;
 	event->completed = true;
 	wake_up(&event->wait);
@@ -276,8 +275,6 @@ int evdi_get_buff_callback_ioctl(struct drm_device *drm_dev, void *data,
 	gralloc_buf->numInts = cmd->numInts;
 	gralloc_buf->data_ints = kzalloc(sizeof(int)*cmd->numInts, GFP_KERNEL);
 	gralloc_buf->data_files = kzalloc(sizeof(struct file*)*cmd->numFds, GFP_KERNEL);
-
-	printk("evdi_get_buff_callback_ioctl: Got buff version: %d, numFds: %d, numInts: %d\n", cmd->version, cmd->numFds, cmd->numInts);
 
 	copy_from_user(gralloc_buf->data_ints, cmd->data_ints, sizeof(int) * cmd->numInts);
 	int *fd_ints = kzalloc(sizeof(int)*cmd->numFds, GFP_KERNEL);
@@ -322,7 +319,6 @@ int evdi_create_buff_callback_ioctl(struct drm_device *drm_dev, void *data,
 	struct evdi_device *evdi = drm_dev->dev_private;
 	struct drm_evdi_create_buff_callabck *cmd = data;
 	struct evdi_event *event;
-	printk("evdi_create_buff_callback_ioctl hi, id %d\n", cmd->id);
 	struct drm_evdi_create_buff_callabck *buf = kzalloc(sizeof(struct drm_evdi_create_buff_callabck), GFP_KERNEL);
 	memcpy(buf, data, sizeof(struct drm_evdi_create_buff_callabck));
 	mutex_lock(&evdi->event_lock);
@@ -383,8 +379,6 @@ int evdi_gbm_add_buf_ioctl(struct drm_device *dev, void *data,
 	add_gralloc_buf->data_files = kzalloc(sizeof(struct file*)*numFds, GFP_KERNEL);
 	add_gralloc_buf->memfd_file = memfd_file;
 
-	printk("Read value from add buf memfd version: %d, numFds: %d, numInts: %d\n", version, numFds, numInts);
-
 	for(int i = 0; i < numFds; i++) {
 		bytes_read = kernel_read(memfd_file, &fd, sizeof(fd), &pos);
 		if (bytes_read != sizeof(fd)) {
@@ -406,9 +400,6 @@ int evdi_gbm_add_buf_ioctl(struct drm_device *dev, void *data,
 		return -EIO;
 	}
 
-	printk("evdi_gbm_add_buf_ioctl 4\n");
-
-
 	struct evdi_event *event = evdi_create_event(evdi, add_buf, add_gralloc_buf);
 	if (!event)
 		return -ENOMEM;
@@ -429,7 +420,6 @@ int evdi_gbm_add_buf_ioctl(struct drm_device *dev, void *data,
 	if (ret)
 		goto err_inval;
 	cmd->id = *((int *)event->reply_data);
-	printk("evdi_gbm_add_buf_ioctl 6 buf id: %d\n", cmd->id);
 	mutex_lock(&evdi->event_lock);
 	idr_remove(&evdi->event_idr, event->poll_id);
 	mutex_unlock(&evdi->event_lock);
@@ -479,7 +469,6 @@ int evdi_gbm_get_buf_ioctl(struct drm_device *dev, void *data,
 		fd_install(fd_tmp, gralloc_buf_tmp->data_files[i]);
 		gralloc_buf->data[i] = fd_tmp;
 	}
-    printk("evdi_gbm_get_buf_ioctl: Got native handle version: %d\n", gralloc_buf_tmp->version);
 
 	if (copy_to_user(cmd->native_handle, gralloc_buf, sizeof(int)*(3 + gralloc_buf->numFds + gralloc_buf->numInts))) {
 		pr_err("Failed to copy file descriptor to userspace\n");
