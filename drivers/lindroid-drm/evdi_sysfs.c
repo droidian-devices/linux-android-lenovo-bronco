@@ -98,11 +98,18 @@ static ssize_t loglevel_store(__always_unused struct device *dev,
 	return count;
 }
 
+struct device_attribute dev_attr_add = {
+	.attr = {
+		.name = "add",
+		.mode = 0666,
+	},
+	.store = add_store,
+};
+
 static struct device_attribute evdi_device_attributes[] = {
 	__ATTR_RO(count),
 	__ATTR_RO(version),
 	__ATTR_RW(loglevel),
-	__ATTR_WO(add),
 	__ATTR_WO(remove_all)
 };
 
@@ -110,6 +117,7 @@ void evdi_sysfs_init(struct device *root)
 {
 	unsigned int i;
 
+	device_create_file(root, &dev_attr_add);
 	if (!PTR_ERR_OR_ZERO(root))
 		for (i = 0; i < ARRAY_SIZE(evdi_device_attributes); i++)
 			device_create_file(root, &evdi_device_attributes[i]);
