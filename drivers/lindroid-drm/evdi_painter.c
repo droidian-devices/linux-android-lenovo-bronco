@@ -655,7 +655,9 @@ void evdi_painter_dpms_notify(struct evdi_painter *painter, int mode)
 
 	switch (mode) {
 	case DRM_MODE_DPMS_ON:
+#if KERNEL_VERSION(5, 5, 0) <= LINUX_VERSION_CODE
 		fallthrough;
+#endif
 	case DRM_MODE_DPMS_STANDBY:
 	case DRM_MODE_DPMS_SUSPEND:
 	case DRM_MODE_DPMS_OFF:
