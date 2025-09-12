@@ -602,6 +602,8 @@ void evdi_painter_send_vblank(struct evdi_painter *painter)
 
 	painter->crtc = NULL;
 	painter->vblank = NULL;
+	//Attempt flush at vblank for reducing latency and wakeups
+	(void)evdi_painter_flush_pending_events(painter);
 }
 
 void evdi_painter_set_vblank(
