@@ -143,6 +143,7 @@ static int copy_primary_pixels(struct evdi_framebuffer *efb,
 		const int dst_offset = buf_byte_stride * r->y1 + byte_offset;
 		char __user *dst = buffer + dst_offset;
 		int y = r->y2 - r->y1;
+		const int height = y;
 
 		/* rect size may correspond to previous resolution */
 		if (max_x < r->x2 || max_y < r->y2) {
@@ -153,12 +154,21 @@ static int copy_primary_pixels(struct evdi_framebuffer *efb,
 		EVDI_VERBOSE("copy rect %d,%d-%d,%d\n", r->x1, r->y1, r->x2,
 			     r->y2);
 
-		for (; y > 0; --y) {
-			if (copy_to_user(dst, src, byte_span))
+		/* Fast path */
+		if (height > 0 && r->x1 == 0 &&
+			(unsigned int)(r->x2 - r->x1) == fb->width &&
+			byte_span == fb->pitches[0] &&
+			fb->pitches[0] == buf_byte_stride) {
+			if (copy_to_user(dst, src, (size_t)byte_span * height))
 				return -EFAULT;
+		} else {
+			for (; y > 0; --y) {
+				if (copy_to_user(dst, src, byte_span))
+					return -EFAULT;
 
-			src += fb->pitches[0];
-			dst += buf_byte_stride;
+				src += fb->pitches[0];
+				dst += buf_byte_stride;
+			}
 		}
 	}
 
