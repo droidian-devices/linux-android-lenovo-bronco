@@ -397,7 +397,7 @@ int evdi_get_buff_callback_ioctl(struct drm_device *drm_dev, void *data,
 	for (i = 0; i < cmd->numFds; i++) {
 		gralloc_buf->data_files[i] = fget(fd_ints[i]);
 		if (!gralloc_buf->data_files[i]) {
-			printk("evdi_get_buff_callback_ioctl: Failed to open fake fb %d\n", cmd->fd_ints[i]);
+			EVDI_ERROR("evdi_get_buff_callback_ioctl: Failed to open fake fb %d\n", cmd->fd_ints[i]);
 			while (--i >= 0) {
 				if (gralloc_buf->data_files[i])
 					fput(gralloc_buf->data_files[i]);
@@ -428,7 +428,7 @@ int evdi_destroy_buff_callback_ioctl(struct drm_device *drm_dev, void *data,
 	event = idr_find(&evdi->event_idr, cmd->poll_id);
 	mutex_unlock(&evdi->event_lock);
 	if (!event) {
-		printk("evdi_destroy_buff_callback_ioctl: event is null\n");
+		EVDI_ERROR("evdi_destroy_buff_callback_ioctl: event is null\n");
 		return -EINVAL;
 	}
 
@@ -478,28 +478,28 @@ int evdi_gbm_add_buf_ioctl(struct drm_device *dev, void *data,
 
 	memfd_file = fget(cmd->fd);
 	if (!memfd_file) {
-		printk("Failed to open fake fb: %d\n", cmd->fd);
+		EVDI_ERROR("Failed to open fake fb: %d\n", cmd->fd);
 		return -EINVAL;
 	}
 
 	pos = 0; /* Initialize offset */
 	bytes_read = kernel_read(memfd_file, &version, sizeof(version), &pos);
 	if (bytes_read != sizeof(version)) {
-		printk("Failed to read version from memfd, bytes_read=%zd\n", bytes_read);
+		EVDI_ERROR("Failed to read version from memfd, bytes_read=%zd\n", bytes_read);
 		fput(memfd_file);
 		return -EIO;
 	}
 
 	bytes_read = kernel_read(memfd_file, &numFds, sizeof(numFds), &pos);
 	if (bytes_read != sizeof(numFds)) {
-		printk("Failed to read numFds from memfd, bytes_read=%zd\n", bytes_read);
+		EVDI_ERROR("Failed to read numFds from memfd, bytes_read=%zd\n", bytes_read);
 		fput(memfd_file);
 		return -EIO;
 	}
 
 	bytes_read = kernel_read(memfd_file, &numInts, sizeof(numInts), &pos);
 	if (bytes_read != sizeof(numInts)) {
-		printk("Failed to read numInts from memfd, bytes_read=%zd\n", bytes_read);
+		EVDI_ERROR("Failed to read numInts from memfd, bytes_read=%zd\n", bytes_read);
 		fput(memfd_file);
 		return -EIO;
 	}
@@ -536,7 +536,7 @@ int evdi_gbm_add_buf_ioctl(struct drm_device *dev, void *data,
 		installed_fd_tmps[i] = -1;
 		bytes_read = kernel_read(memfd_file, &fd, sizeof(fd), &pos);
 		if (bytes_read != sizeof(fd)) {
-			printk("Failed to read fd from memfd, bytes_read=%zd\n", bytes_read);
+			EVDI_ERROR("Failed to read fd from memfd, bytes_read=%zd\n", bytes_read);
 			EVDI_SAFE_KFREE(add_gralloc_buf->data_ints);
 			EVDI_SAFE_KFREE(add_gralloc_buf->data_files);
 			kfree(add_gralloc_buf);
@@ -546,7 +546,7 @@ int evdi_gbm_add_buf_ioctl(struct drm_device *dev, void *data,
 		}
 		fd_file = fget(fd);
 		if (!fd_file) {
-			printk("Failed to open fake fb's %d fd file: %d\n", cmd->fd, fd);
+			EVDI_ERROR("Failed to open fake fb's %d fd file: %d\n", cmd->fd, fd);
 			EVDI_SAFE_KFREE(add_gralloc_buf->data_ints);
 			EVDI_SAFE_KFREE(add_gralloc_buf->data_files);
 			kfree(add_gralloc_buf);
@@ -560,7 +560,7 @@ int evdi_gbm_add_buf_ioctl(struct drm_device *dev, void *data,
 
 	bytes_read = kernel_read(memfd_file, add_gralloc_buf->data_ints, sizeof(int) *numInts, &pos);
 	if (bytes_read != sizeof(int) *numInts) {
-		printk("Failed to read ints from memfd, bytes_read=%zd\n", bytes_read);
+		EVDI_ERROR("Failed to read ints from memfd, bytes_read=%zd\n", bytes_read);
 		for (i = 0; i < numFds; i++) {
 			if (add_gralloc_buf->data_files[i])
 				fput(add_gralloc_buf->data_files[i]);
@@ -580,7 +580,7 @@ int evdi_gbm_add_buf_ioctl(struct drm_device *dev, void *data,
 	wake_up(&evdi->poll_ioct_wq);
 	ret = wait_event_killable_timeout(event->wait, event->completed, EVDI_WAIT_TIMEOUT);
 	if (ret == 0) {
-		printk("evdi_gbm_add_buf_ioctl: wait timed out\n");
+		EVDI_ERROR("evdi_gbm_add_buf_ioctl: wait timed out\n");
 		for (i = 0; i < numFds; i++) {
 			if (add_gralloc_buf->data_files[i])
 				fput(add_gralloc_buf->data_files[i]);
@@ -592,13 +592,13 @@ int evdi_gbm_add_buf_ioctl(struct drm_device *dev, void *data,
 		goto err_event;
 	}
 	if (ret < 0){
-		printk("evdi_gbm_add_buf_ioctl: wait_event_interruptible interrupted: %d\n", ret);
+		EVDI_ERROR("evdi_gbm_add_buf_ioctl: wait_event_interruptible interrupted: %d\n", ret);
 		goto err_event;
 	}
 
 	ret = event->result;
 	if (ret < 0) {
-		pr_err("evdi_gbm_add_buf_ioctl: user ioctl failled\n");
+		EVDI_ERROR("evdi_gbm_add_buf_ioctl: user ioctl failled\n");
 		goto err_event;
 	}
 
@@ -649,16 +649,16 @@ int evdi_gbm_get_buf_ioctl(struct drm_device *dev, void *data,
 	wake_up(&evdi->poll_ioct_wq);
 	ret = wait_event_killable_timeout(event->wait, event->completed, EVDI_WAIT_TIMEOUT);
 	if (ret == 0) {
-		printk("evdi_gbm_get_buf_ioctl: wait timed out\n");
+		EVDI_ERROR("evdi_gbm_get_buf_ioctl: wait timed out\n");
 		goto err_event;
 	} else if (ret < 0) {
-		printk("evdi_gbm_get_buf_ioctl: wait_event_interruptible interrupted: %d\n", ret);
+		EVDI_ERROR("evdi_gbm_get_buf_ioctl: wait_event_interruptible interrupted: %d\n", ret);
 		goto err_event;
 	}
 
 	ret = event->result;
 	if (ret < 0) {
-		pr_err("evdi_gbm_get_buf_ioctl: user ioctl failled\n");
+		EVDI_ERROR("evdi_gbm_get_buf_ioctl: user ioctl failled\n");
 		goto err_event;
 	}
 
@@ -692,7 +692,7 @@ int evdi_gbm_get_buf_ioctl(struct drm_device *dev, void *data,
 	if (evdi_copy_to_user_allow_partial((void __user *)cmd->native_handle,
 					    gralloc_buf,
 					    sizeof(int) * (3 + gralloc_buf->numFds + gralloc_buf->numInts))) {
-		pr_err("Failed to copy file descriptor to userspace\n");
+		EVDI_ERROR("Failed to copy file descriptor to userspace\n");
 		for (i = 0; i < gralloc_buf->numFds; i++)
 			put_unused_fd(installed_fds[i]);
 		ret = -EFAULT;
@@ -752,17 +752,17 @@ int evdi_gbm_del_buf_ioctl(struct drm_device *dev, void *data,
 	wake_up(&evdi->poll_ioct_wq);
 	ret = wait_event_killable_timeout(event->wait, event->completed, EVDI_WAIT_TIMEOUT);
 	if (ret == 0) {
-		printk("evdi_gbm_del_buf_ioctl: wait timed out\n");
+		EVDI_ERROR("evdi_gbm_del_buf_ioctl: wait timed out\n");
 		ret = -ETIMEDOUT;
 	} else if (ret < 0) {
-		printk("evdi_gbm_get_buf_ioctl: wait_event_interruptible interrupted: %d\n", ret);
+		EVDI_ERROR("evdi_gbm_get_buf_ioctl: wait_event_interruptible interrupted: %d\n", ret);
 		/* fallthrough */
 	}
 
 	if (ret > 0) {
 		ret = event->result;
 		if (ret < 0) {
-			pr_err("evdi_gbm_get_buf_ioctl: user ioctl failled\n");
+			EVDI_ERROR("evdi_gbm_get_buf_ioctl: user ioctl failled\n");
 		}
 	}
 
@@ -788,16 +788,16 @@ int evdi_gbm_create_buff (struct drm_device *dev, void *data,
 	wake_up(&evdi->poll_ioct_wq);
 	ret = wait_event_killable_timeout(event->wait, event->completed, EVDI_WAIT_TIMEOUT);
 	if (ret == 0) {
-		printk("evdi_gbm_create_buff: wait timed out\n");
+		EVDI_ERROR("evdi_gbm_create_buff: wait timed out\n");
 		goto err_event;
 	} else if (ret < 0) {
-		printk("evdi_gbm_create_buff: wait_event_interruptible interrupted: %d\n", ret);
+		EVDI_ERROR("evdi_gbm_create_buff: wait_event_interruptible interrupted: %d\n", ret);
 		goto err_event;
 	}
 
 	ret = event->result;
 	if (ret < 0) {
-		pr_err("evdi_gbm_create_buff: user ioctl failled\n");
+		EVDI_ERROR("evdi_gbm_create_buff: user ioctl failled\n");
 		goto err_event;
 	}
 
@@ -840,14 +840,14 @@ int evdi_poll_ioctl(struct drm_device *drm_dev, void *data,
 	EVDI_CHECKPT();
 
 	if (!evdi) {
-		pr_err("evdi is null\n");
+		EVDI_ERROR("evdi is null\n");
 		return -ENODEV;
 	}
 
 	ret = wait_event_killable(evdi->poll_ioct_wq, !list_empty(&evdi->event_queue));
 
 	if (ret < 0) {
-		pr_err("evdi_poll_ioctl: Wait interrupted by signal\n");
+		EVDI_ERROR("evdi_poll_ioctl: Wait interrupted by signal\n");
 		return ret;
 	}
 
@@ -874,7 +874,7 @@ int evdi_poll_ioctl(struct drm_device *drm_dev, void *data,
 
 			fd = get_unused_fd_flags(O_RDWR);
 			if (fd < 0) {
-				pr_err("Failed to allocate file descriptor\n");
+				EVDI_ERROR("Failed to allocate file descriptor\n");
 				return fd;
 			}
 
@@ -901,7 +901,7 @@ int evdi_poll_ioctl(struct drm_device *drm_dev, void *data,
 				bytes_write = kernel_write(add_gralloc_buf->memfd_file,
 							   &reserved_fd_tmps[i], sizeof(reserved_fd_tmps[i]), &pos);
 				if (bytes_write != sizeof(fd_tmp)) {
-					pr_err("Failed to write fd\n");
+					EVDI_ERROR("Failed to write fd\n");
 					for (; i >= 0; i--)
 						put_unused_fd(reserved_fd_tmps[i]);
 
@@ -915,7 +915,7 @@ int evdi_poll_ioctl(struct drm_device *drm_dev, void *data,
 			}
 
 			if (evdi_copy_to_user_allow_partial((void __user *)cmd->data, &fd, sizeof(fd))) {
-				pr_err("Failed to copy file descriptor to userspace\n");
+				EVDI_ERROR("Failed to copy file descriptor to userspace\n");
 				for (i = 0; i < add_gralloc_buf->numFds; i++)
 					put_unused_fd(reserved_fd_tmps[i]);
 
@@ -952,7 +952,7 @@ int evdi_poll_ioctl(struct drm_device *drm_dev, void *data,
 			}
 			break;
 		default:
-			pr_err("unknown event: %d\n", cmd->event);
+			EVDI_ERROR("unknown event: %d\n", cmd->event);
 	}
 
 	return 0;
