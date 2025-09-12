@@ -29,6 +29,7 @@
 
 #include <linux/dma-buf.h>
 #include <linux/vt_kern.h>
+#include <linux/workqueue.h>
 #if KERNEL_VERSION(5, 4, 0) <= LINUX_VERSION_CODE
 #include <linux/compiler_attributes.h>
 #endif
@@ -240,6 +241,9 @@ static void evdi_painter_add_event_to_pending_list(
 	spin_unlock_irqrestore(&painter->drm_device->event_lock, flags);
 }
 
+static void evdi_send_events_now(struct work_struct *work);
+static void evdi_send_events_retry(struct work_struct *work);
+
 static bool evdi_painter_flush_pending_events(struct evdi_painter *painter)
 {
 	unsigned long flags;
@@ -297,13 +301,10 @@ static void evdi_painter_send_event(struct evdi_painter *painter,
 	}
 
 	evdi_painter_add_event_to_pending_list(painter, event);
-	if (delayed_work_pending(&painter->send_events_work))
-		return;
 
 	if (evdi_painter_flush_pending_events(painter))
 		return;
-
-	schedule_delayed_work(&painter->send_events_work, msecs_to_jiffies(5));
+	schedule_work(&painter->send_events_now);
 }
 
 static struct drm_pending_event *create_update_ready_event(void)
@@ -741,7 +742,8 @@ static void evdi_painter_events_cleanup(struct evdi_painter *painter)
 	}
 	spin_unlock_irqrestore(&painter->drm_device->event_lock, flags);
 
-	cancel_delayed_work_sync(&painter->send_events_work);
+	cancel_delayed_work_sync(&painter->send_events_retry);
+	cancel_work_sync(&painter->send_events_now);
 }
 
 static int
@@ -1022,15 +1024,27 @@ int evdi_painter_request_update_ioctl(struct drm_device *drm_dev,
 	}
 }
 
-static void evdi_send_events_work(struct work_struct *work)
+static void evdi_send_events_now(struct work_struct *work)
 {
 	struct evdi_painter *painter =
-		container_of(work, struct evdi_painter,	send_events_work.work);
-
+		container_of(work, struct evdi_painter, send_events_now);
 	if (evdi_painter_flush_pending_events(painter))
 		return;
 
-	schedule_delayed_work(&painter->send_events_work, msecs_to_jiffies(5));
+	//If flush fails, back off without stacking
+	if (!delayed_work_pending(&painter->send_events_retry))
+		schedule_delayed_work(&painter->send_events_retry, msecs_to_jiffies(2));
+}
+
+static void evdi_send_events_retry(struct work_struct *work)
+{
+	struct evdi_painter *painter =
+		container_of(to_delayed_work(work), struct evdi_painter, send_events_retry);
+	if (evdi_painter_flush_pending_events(painter))
+		return;
+
+	// Ensure forward progress in worst case
+	schedule_delayed_work(&painter->send_events_retry, msecs_to_jiffies(2));
 }
 
 int evdi_painter_init(struct evdi_device *dev)
@@ -1048,8 +1062,10 @@ int evdi_painter_init(struct evdi_device *dev)
 		dev->painter->drm_device = dev->ddev;
 
 		INIT_LIST_HEAD(&dev->painter->pending_events);
-		INIT_DELAYED_WORK(&dev->painter->send_events_work,
-			evdi_send_events_work);
+		INIT_WORK(&dev->painter->send_events_now,
+			evdi_send_events_now);
+		INIT_DELAYED_WORK(&dev->painter->send_events_retry,
+			evdi_send_events_retry);
 		return 0;
 	}
 	return -ENOMEM;
