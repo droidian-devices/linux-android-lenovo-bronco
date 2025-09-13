@@ -83,6 +83,10 @@ struct drm_clip_rect evdi_framebuffer_sanitize_rect(
 	return rect;
 }
 
+#if KERNEL_VERSION(4, 15, 0) > LINUX_VERSION_CODE
+#define DRM_MODESET_ACQUIRE_INTERRUPTIBLE BIT(0)
+#endif
+
 #if KERNEL_VERSION(5, 0, 0) <= LINUX_VERSION_CODE || defined(EL8)
 #else
 /*
@@ -151,7 +155,11 @@ retry:
 out:
 	if (ret == -EDEADLK) {
 		drm_atomic_state_clear(state);
+#if KERNEL_VERSION(4, 15, 0) <= LINUX_VERSION_CODE
 		ret = drm_modeset_backoff(&ctx);
+#else
+		ret = drm_modeset_backoff_interruptible(&ctx);
+#endif
 		if (!ret)
 			goto retry;
 	}
