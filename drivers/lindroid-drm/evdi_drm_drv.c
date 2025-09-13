@@ -39,6 +39,10 @@
 #include "evdi_debug.h"
 #include "evdi_drm.h"
 
+#if KERNEL_VERSION(4, 15, 0) > LINUX_VERSION_CODE
+#define drm_dev_put drm_dev_unref
+#endif
+
 #if KERNEL_VERSION(6, 8, 0) <= LINUX_VERSION_CODE || defined(EL8)
 #define EVDI_DRM_UNLOCKED 0
 #else
