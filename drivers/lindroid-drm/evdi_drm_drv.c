@@ -268,8 +268,7 @@ struct evdi_event *evdi_create_event(struct evdi_device *evdi, enum poll_event_t
 	event->owner = file;
 	event->type = type;
 	event->data = data;
-	init_waitqueue_head(&event->wait);
-	event->completed = false;
+	init_completion(&event->done);
 	event->evdi = evdi;
 
 #if !defined(EVDI_HAVE_XARRAY)
@@ -368,8 +367,7 @@ int evdi_swap_callback_ioctl(struct drm_device *drm_dev, void *data,
 		return -EINVAL;
 
 	event->result = 0;
-	event->completed = true;
-	wake_up(&event->wait);
+	complete(&event->done);
 	return 0;
 }
 
@@ -401,8 +399,7 @@ int evdi_add_buff_callback_ioctl(struct drm_device *drm_dev, void *data,
 	*buff_id_ptr = cmd->buff_id;
 	event->reply_data = buff_id_ptr;
 	event->result = 0;
-	event->completed = true;
-	wake_up(&event->wait);
+	complete(&event->done);
 	return 0;
 }
 
@@ -496,8 +493,7 @@ int evdi_get_buff_callback_ioctl(struct drm_device *drm_dev, void *data,
 
 	event->reply_data = gralloc_buf;
 	event->result = 0;
-	event->completed = true;
-	wake_up(&event->wait);
+	complete(&event->done);
 	return 0;
 }
 
@@ -522,8 +518,7 @@ int evdi_destroy_buff_callback_ioctl(struct drm_device *drm_dev, void *data,
 	}
 
 	event->result = 0;
-	event->completed = true;
-	wake_up(&event->wait);
+	complete(&event->done);
 	return 0;
 }
 
@@ -551,9 +546,8 @@ int evdi_create_buff_callback_ioctl(struct drm_device *drm_dev, void *data,
 	}
 
 	event->result = 0;
-	event->completed = true;
 	event->reply_data = buf;
-	wake_up(&event->wait);
+	complete(&event->done);
 	return 0;
 }
 
@@ -686,7 +680,7 @@ int evdi_gbm_add_buf_ioctl(struct drm_device *dev, void *data,
 		return -ENOMEM;
 
 	wake_up(&evdi->poll_ioct_wq);
-	ret = wait_event_interruptible_timeout(event->wait, event->completed, EVDI_WAIT_TIMEOUT);
+	ret = wait_for_completion_interruptible_timeout(&event->done, EVDI_WAIT_TIMEOUT);
 	if (ret == 0) {
 		EVDI_ERROR("evdi_gbm_add_buf_ioctl: wait timed out\n");
 		for (i = 0; i < numFds; i++) {
@@ -749,7 +743,7 @@ int evdi_gbm_get_buf_ioctl(struct drm_device *dev, void *data,
 		return -ENOMEM;
 
 	wake_up(&evdi->poll_ioct_wq);
-	ret = wait_event_interruptible_timeout(event->wait, event->completed, EVDI_WAIT_TIMEOUT);
+	ret = wait_for_completion_interruptible_timeout(&event->done, EVDI_WAIT_TIMEOUT);
 	if (ret == 0) {
 		EVDI_ERROR("evdi_gbm_get_buf_ioctl: wait timed out\n");
 		goto err_event;
@@ -846,7 +840,7 @@ int evdi_gbm_del_buf_ioctl(struct drm_device *dev, void *data,
 		return -ENOMEM;
 
 	wake_up(&evdi->poll_ioct_wq);
-	ret = wait_event_interruptible_timeout(event->wait, event->completed, EVDI_WAIT_TIMEOUT);
+	ret = wait_for_completion_interruptible_timeout(&event->done, EVDI_WAIT_TIMEOUT);
 	if (ret == 0) {
 		EVDI_ERROR("evdi_gbm_del_buf_ioctl: wait timed out\n");
 		ret = -ETIMEDOUT;
@@ -879,7 +873,7 @@ int evdi_gbm_create_buff (struct drm_device *dev, void *data,
 		return -ENOMEM;
 
 	wake_up(&evdi->poll_ioct_wq);
-	ret = wait_event_interruptible_timeout(event->wait, event->completed, EVDI_WAIT_TIMEOUT);
+	ret = wait_for_completion_interruptible_timeout(&event->done, EVDI_WAIT_TIMEOUT);
 	if (ret == 0) {
 		EVDI_ERROR("evdi_gbm_create_buff: wait timed out\n");
 		goto err_event;
@@ -934,6 +928,7 @@ int evdi_poll_ioctl(struct drm_device *drm_dev, void *data,
 	ret = wait_event_interruptible(evdi->poll_ioct_wq,
 				  atomic_read(&evdi->poll_stopping) ||
 				  !list_empty(&evdi->event_queue));
+
 	if (ret < 0) {
 		EVDI_ERROR("evdi_poll_ioctl: Wait interrupted by signal\n");
 		return ret;
@@ -1064,7 +1059,6 @@ static void evdi_cancel_events_for_file(struct evdi_device *evdi,
 			continue;
 
 		event->result = -ECANCELED;
-		event->completed = true;
 
 #if defined(EVDI_HAVE_XARRAY)
 		xa_erase(&evdi->event_xa, event->poll_id);
@@ -1073,7 +1067,7 @@ static void evdi_cancel_events_for_file(struct evdi_device *evdi,
 #endif
 		list_del_init(&event->list);
 		event->on_queue = false;
-		wake_up_all(&event->wait);
+		complete_all(&event->done);
 		evdi_event_free(event);
 	}
 
@@ -1110,8 +1104,8 @@ static int evdi_drm_device_init(struct drm_device *dev)
 	evdi->cursor_events_enabled = false;
 	dev->dev_private = evdi;
 	evdi->poll_event = none;
-	init_waitqueue_head (&evdi->poll_ioct_wq);
-	init_waitqueue_head (&evdi->poll_response_ioct_wq);
+	init_waitqueue_head(&evdi->poll_ioct_wq);
+	init_waitqueue_head(&evdi->poll_response_ioct_wq);
 	atomic_set(&evdi->poll_stopping, 0);
 	mutex_init(&evdi->poll_lock);
 	init_completion(&evdi->poll_completion);

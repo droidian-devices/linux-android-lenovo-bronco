@@ -18,6 +18,7 @@
 #include <linux/mutex.h>
 #include <linux/device.h>
 #include <linux/atomic.h>
+#include <linux/completion.h>
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5,0,0) || defined(EL8) || defined(EL9)
 #include <linux/xarray.h>
 #define EVDI_HAVE_XARRAY	1
@@ -90,10 +91,9 @@ struct evdi_event {
 	void *data;
 	void *reply_data;
 	int poll_id;
-	wait_queue_head_t wait;
 	bool on_queue;
 	struct drm_file *owner;
-	bool completed;
+	struct completion done;
 	int result;
 
 	struct list_head list;
