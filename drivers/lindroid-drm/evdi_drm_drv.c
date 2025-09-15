@@ -20,6 +20,7 @@
 #include <linux/sched/signal.h>
 #include <linux/wait.h>
 #include <linux/slab.h>
+#include <linux/rcupdate.h>
 #if KERNEL_VERSION(5, 16, 0) <= LINUX_VERSION_CODE || defined(EL8) || defined(EL9)
 #include <drm/drm_ioctl.h>
 #include <drm/drm_file.h>
@@ -271,9 +272,18 @@ struct evdi_event *evdi_create_event(struct evdi_device *evdi, enum poll_event_t
 	event->completed = false;
 	event->evdi = evdi;
 
+#if !defined(EVDI_HAVE_XARRAY)
 	idr_preload(GFP_KERNEL);
+#endif
 	spin_lock(&evdi->event_lock);
 	event->poll_id = atomic_fetch_inc(&evdi->next_event_id);
+#if defined(EVDI_HAVE_XARRAY)
+	if (xa_err(xa_store(&evdi->event_xa, event->poll_id, event, GFP_NOWAIT))) {
+		spin_unlock(&evdi->event_lock);
+		kmem_cache_free(evdi_event_cache, event);
+		return NULL;
+	}
+#else
 	if (idr_alloc(&evdi->event_idr, event,
 		      event->poll_id, event->poll_id + 1, GFP_NOWAIT) < 0) {
 		spin_unlock(&evdi->event_lock);
@@ -281,11 +291,14 @@ struct evdi_event *evdi_create_event(struct evdi_device *evdi, enum poll_event_t
 		kmem_cache_free(evdi_event_cache, event);
 		return NULL;
 	}
+#endif
 
 	list_add_tail(&event->list, &evdi->event_queue);
 	event->on_queue = true;
 	spin_unlock(&evdi->event_lock);
+#if !defined(EVDI_HAVE_XARRAY)
 	idr_preload_end();
+#endif
 
 	return event;
 }
@@ -321,7 +334,11 @@ void evdi_event_unlink_and_free(struct evdi_device *evdi,
                                        struct evdi_event *event)
 {
 	spin_lock(&evdi->event_lock);
+#if defined(EVDI_HAVE_XARRAY)
+	xa_erase(&evdi->event_xa, event->poll_id);
+#else
 	idr_remove(&evdi->event_idr, event->poll_id);
+#endif
 	if (event->on_queue && !list_empty(&event->list)) {
 		list_del_init(&event->list);
 		event->on_queue = false;
@@ -337,9 +354,15 @@ int evdi_swap_callback_ioctl(struct drm_device *drm_dev, void *data,
 	struct drm_evdi_add_buff_callabck *cmd = data;
 	struct evdi_event *event;
 
+#if defined(EVDI_HAVE_XARRAY)
+	rcu_read_lock();
+	event = xa_load(&evdi->event_xa, cmd->poll_id);
+	rcu_read_unlock();
+#else
 	spin_lock(&evdi->event_lock);
 	event = idr_find(&evdi->event_idr, cmd->poll_id);
 	spin_unlock(&evdi->event_lock);
+#endif
 
 	if (!event)
 		return -EINVAL;
@@ -358,9 +381,15 @@ int evdi_add_buff_callback_ioctl(struct drm_device *drm_dev, void *data,
 	struct evdi_event *event;
 	int *buff_id_ptr;
 
+#if defined(EVDI_HAVE_XARRAY)
+	rcu_read_lock();
+	event = xa_load(&evdi->event_xa, cmd->poll_id);
+	rcu_read_unlock();
+#else
 	spin_lock(&evdi->event_lock);
 	event = idr_find(&evdi->event_idr, cmd->poll_id);
 	spin_unlock(&evdi->event_lock);
+#endif
 
 	if (!event)
 		return -EINVAL;
@@ -386,10 +415,15 @@ int evdi_get_buff_callback_ioctl(struct drm_device *drm_dev, void *data,
 	struct evdi_gralloc_buf *gralloc_buf;
 	int *fd_ints = NULL;
 	int i;
-
+#if defined(EVDI_HAVE_XARRAY)
+	rcu_read_lock();
+	event = xa_load(&evdi->event_xa, cmd->poll_id);
+	rcu_read_unlock();
+#else
 	spin_lock(&evdi->event_lock);
 	event = idr_find(&evdi->event_idr, cmd->poll_id);
 	spin_unlock(&evdi->event_lock);
+#endif
 
 	if (!event)
 		return -EINVAL;
@@ -473,9 +507,15 @@ int evdi_destroy_buff_callback_ioctl(struct drm_device *drm_dev, void *data,
 	struct evdi_device *evdi = drm_dev->dev_private;
 	struct drm_evdi_add_buff_callabck *cmd = data;
 	struct evdi_event *event;
+#if defined(EVDI_HAVE_XARRAY)
+	rcu_read_lock();
+	event = xa_load(&evdi->event_xa, cmd->poll_id);
+	rcu_read_unlock();
+#else
 	spin_lock(&evdi->event_lock);
 	event = idr_find(&evdi->event_idr, cmd->poll_id);
 	spin_unlock(&evdi->event_lock);
+#endif
 	if (!event) {
 		EVDI_ERROR("evdi_destroy_buff_callback_ioctl: event is null\n");
 		return -EINVAL;
@@ -496,11 +536,15 @@ int evdi_create_buff_callback_ioctl(struct drm_device *drm_dev, void *data,
 	struct drm_evdi_create_buff_callabck *buf = kmemdup(data, sizeof(*buf), GFP_KERNEL);
 	if (!buf)
 		return -ENOMEM;
-
+#if defined(EVDI_HAVE_XARRAY)
+	rcu_read_lock();
+	event = xa_load(&evdi->event_xa, cmd->poll_id);
+	rcu_read_unlock();
+#else
 	spin_lock(&evdi->event_lock);
 	event = idr_find(&evdi->event_idr, cmd->poll_id);
 	spin_unlock(&evdi->event_lock);
-
+#endif
 	if (!event) {
 		kfree(buf);
 		return -EINVAL;
@@ -1022,7 +1066,11 @@ static void evdi_cancel_events_for_file(struct evdi_device *evdi,
 		event->result = -ECANCELED;
 		event->completed = true;
 
+#if defined(EVDI_HAVE_XARRAY)
+		xa_erase(&evdi->event_xa, event->poll_id);
+#else
 		idr_remove(&evdi->event_idr, event->poll_id);
+#endif
 		list_del_init(&event->list);
 		event->on_queue = false;
 		wake_up_all(&event->wait);
@@ -1075,7 +1123,11 @@ static int evdi_drm_device_init(struct drm_device *dev)
 
 	spin_lock_init(&evdi->event_lock);
 	INIT_LIST_HEAD(&evdi->event_queue);
+#if defined(EVDI_HAVE_XARRAY)
+	xa_init_flags(&evdi->event_xa, XA_FLAGS_ALLOC);
+#else
 	idr_init(&evdi->event_idr);
+#endif
 	atomic_set(&evdi->next_event_id, 1);
 
 	ret = evdi_painter_init(evdi);
