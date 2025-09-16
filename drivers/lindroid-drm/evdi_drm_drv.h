@@ -17,6 +17,7 @@
 #include <linux/version.h>
 #include <linux/mutex.h>
 #include <linux/device.h>
+#include <linux/atomic.h>
 #if KERNEL_VERSION(5, 5, 0) <= LINUX_VERSION_CODE || defined(EL8) || defined(EL9)
 #include <drm/drm_drv.h>
 #include <drm/drm_fourcc.h>
@@ -40,6 +41,8 @@
 #include "evdi_drm.h"
 #include "tests/evdi_test.h"
 
+#define EVDI_WAIT_TIMEOUT (5*HZ)
+
 struct evdi_fbdev;
 struct evdi_painter;
 
@@ -62,6 +65,7 @@ struct evdi_device {
 	wait_queue_head_t poll_ioct_wq;
 	wait_queue_head_t poll_response_ioct_wq;
 	struct mutex poll_lock;
+	atomic_t poll_stopping;
 	struct completion poll_completion;
 	int last_buf_add_id;
 	void *last_got_buff;
