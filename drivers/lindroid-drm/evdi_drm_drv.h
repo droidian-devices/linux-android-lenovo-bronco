@@ -18,6 +18,13 @@
 #include <linux/mutex.h>
 #include <linux/device.h>
 #include <linux/atomic.h>
+#include <linux/completion.h>
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,0,0) || defined(EL8) || defined(EL9)
+#include <linux/xarray.h>
+#define EVDI_HAVE_XARRAY	1
+#else
+#undef EVDI_HAVE_XARRAY
+#endif
 #if KERNEL_VERSION(5, 5, 0) <= LINUX_VERSION_CODE || defined(EL8) || defined(EL9)
 #include <drm/drm_drv.h>
 #include <drm/drm_fourcc.h>
@@ -69,9 +76,13 @@ struct evdi_device {
 	struct completion poll_completion;
 	int last_buf_add_id;
 	void *last_got_buff;
-	struct mutex event_lock;
+	spinlock_t event_lock;
 	struct list_head event_queue;
+#if defined(EVDI_HAVE_XARRAY)
+	struct xarray event_xa;
+#else
 	struct idr event_idr;
+#endif
 	atomic_t next_event_id;
 };
 
@@ -80,10 +91,9 @@ struct evdi_event {
 	void *data;
 	void *reply_data;
 	int poll_id;
-	wait_queue_head_t wait;
 	bool on_queue;
 	struct drm_file *owner;
-	bool completed;
+	struct completion done;
 	int result;
 
 	struct list_head list;
@@ -263,4 +273,5 @@ void evdi_painter_force_full_modeset(struct evdi_painter *painter);
 struct drm_clip_rect evdi_painter_framebuffer_size(struct evdi_painter *painter);
 
 int evdi_fb_get_bpp(uint32_t format);
+void evdi_event_free(struct evdi_event *e);
 #endif
