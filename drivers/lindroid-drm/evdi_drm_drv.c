@@ -174,8 +174,6 @@ static int evdi_copy_to_user_allow_partial(void __user *dst, const void *src, si
 	return 0;
 }
 
-#define EVDI_WAIT_TIMEOUT (5*HZ)
-
 #define EVDI_SAFE_KFREE(p) do { kfree(p); (p) = NULL; } while (0)
 
 #if KERNEL_VERSION(5, 11, 0) <= LINUX_VERSION_CODE || defined(EL8)
