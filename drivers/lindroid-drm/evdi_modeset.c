@@ -236,7 +236,7 @@ int evdi_atomic_helper_page_flip(struct drm_crtc *crtc,
 	evdi = dev->dev_private;
 	efb = evdi->painter->scanout_fb;
 
-	ev_event = evdi_create_event(evdi, swap_to, &efb->gralloc_buf_id);
+	ev_event = evdi_create_event(evdi, swap_to, &efb->gralloc_buf_id, event->base.file_priv);
 	if (!ev_event)
 		return -ENOMEM;
 
@@ -253,10 +253,7 @@ int evdi_atomic_helper_page_flip(struct drm_crtc *crtc,
 		return ret;
 	}
 
-	mutex_lock(&evdi->event_lock);
-	idr_remove(&evdi->event_idr, ev_event->poll_id);
-	mutex_unlock(&evdi->event_lock);
-	kfree(ev_event);
+	evdi_event_unlink_and_free(evdi, ev_event);
 
 	evdi_painter_send_vblank(evdi->painter);
 

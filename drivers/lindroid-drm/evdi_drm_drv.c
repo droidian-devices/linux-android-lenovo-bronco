@@ -250,12 +250,15 @@ static struct drm_driver driver = {
 	.patchlevel = DRIVER_PATCH,
 };
 
-struct evdi_event *evdi_create_event(struct evdi_device *evdi, enum poll_event_type type, void *data)
+struct evdi_event *evdi_create_event(struct evdi_device *evdi, enum poll_event_type type, void *data, struct drm_file *file)
 {
 	struct evdi_event *event = kzalloc(sizeof(*event), GFP_KERNEL);
 	if (!event)
 		return NULL;
 
+	INIT_LIST_HEAD(&event->list);
+	event->on_queue = false;
+	event->owner = file;
 	event->type = type;
 	event->data = data;
 	init_waitqueue_head(&event->wait);
@@ -279,11 +282,24 @@ struct evdi_event *evdi_create_event(struct evdi_device *evdi, enum poll_event_t
 	idr_preload_end();
 
 	list_add_tail(&event->list, &evdi->event_queue);
+	event->on_queue = true;
 
 	mutex_unlock(&evdi->event_lock);
 	return event;
 }
 
+void evdi_event_unlink_and_free(struct evdi_device *evdi,
+                                       struct evdi_event *event)
+{
+	mutex_lock(&evdi->event_lock);
+	idr_remove(&evdi->event_idr, event->poll_id);
+	if (event->on_queue && !list_empty(&event->list)) {
+		list_del_init(&event->list);
+		event->on_queue = false;
+	}
+	mutex_unlock(&evdi->event_lock);
+	kfree(event);
+}
 
 int evdi_swap_callback_ioctl(struct drm_device *drm_dev, void *data,
                     struct drm_file *file)
@@ -577,7 +593,7 @@ int evdi_gbm_add_buf_ioctl(struct drm_device *dev, void *data,
 		return -EIO;
 	}
 
-	event = evdi_create_event(evdi, add_buf, add_gralloc_buf);
+	event = evdi_create_event(evdi, add_buf, add_gralloc_buf, file);
 	if (!event)
 		return -ENOMEM;
 
@@ -614,10 +630,7 @@ int evdi_gbm_add_buf_ioctl(struct drm_device *dev, void *data,
 		kfree(event->reply_data);
 		event->reply_data = NULL;
 	}
-	mutex_lock(&evdi->event_lock);
-	idr_remove(&evdi->event_idr, event->poll_id);
-	mutex_unlock(&evdi->event_lock);
-	kfree(event);
+	evdi_event_unlink_and_free(evdi, event);
 	EVDI_SAFE_KFREE(installed_fd_tmps);
 	return 0;
 
@@ -626,10 +639,7 @@ int evdi_gbm_add_buf_ioctl(struct drm_device *dev, void *data,
 	return -EINVAL;
 
  err_event:
-	mutex_lock(&evdi->event_lock);
-	idr_remove(&evdi->event_idr, event->poll_id);
-	mutex_unlock(&evdi->event_lock);
-	kfree(event);
+	evdi_event_unlink_and_free(evdi, event);
 	EVDI_SAFE_KFREE(installed_fd_tmps);
 	return ret ? ret : -ETIMEDOUT;
 }
@@ -646,7 +656,7 @@ int evdi_gbm_get_buf_ioctl(struct drm_device *dev, void *data,
 	int i;
 	int *installed_fds = NULL;
 
-	event = evdi_create_event(evdi, get_buf, &cmd->id);
+	event = evdi_create_event(evdi, get_buf, &cmd->id, file);
 	if (!event)
 		return -ENOMEM;
 
@@ -713,10 +723,7 @@ int evdi_gbm_get_buf_ioctl(struct drm_device *dev, void *data,
 		kfree(gralloc_buf_tmp);
 		event->reply_data = NULL;
 	}
-	mutex_lock(&evdi->event_lock);
-	idr_remove(&evdi->event_idr, event->poll_id);
-	mutex_unlock(&evdi->event_lock);
-	kfree(event);
+	evdi_event_unlink_and_free(evdi, event);
 	EVDI_SAFE_KFREE(installed_fds);
 
 	return 0;
@@ -732,11 +739,8 @@ err_event:
 		EVDI_SAFE_KFREE(gralloc_buf_tmp->data_files);
 		kfree(gralloc_buf_tmp);
 		event->reply_data = NULL;
-	}
-	mutex_lock(&evdi->event_lock);
-	idr_remove(&evdi->event_idr, event->poll_id);
-	mutex_unlock(&evdi->event_lock);
-	kfree(event);
+	};
+	evdi_event_unlink_and_free(evdi, event);
 	EVDI_SAFE_KFREE(installed_fds);
 	return ret ? ret : -ETIMEDOUT;
 }
@@ -749,7 +753,7 @@ int evdi_gbm_del_buf_ioctl(struct drm_device *dev, void *data,
 	int ret;
 	struct evdi_event *event;
 
-	event = evdi_create_event(evdi, destroy_buf, &cmd->id);
+	event = evdi_create_event(evdi, destroy_buf, &cmd->id, file);
 	if (!event)
 		return -ENOMEM;
 
@@ -770,10 +774,7 @@ int evdi_gbm_del_buf_ioctl(struct drm_device *dev, void *data,
 		}
 	}
 
-	mutex_lock(&evdi->event_lock);
-	idr_remove(&evdi->event_idr, event->poll_id);
-	mutex_unlock(&evdi->event_lock);
-	kfree(event);
+	evdi_event_unlink_and_free(evdi, event);
 
 	return ret > 0 ? 0 : ret;
 }
@@ -785,7 +786,7 @@ int evdi_gbm_create_buff (struct drm_device *dev, void *data,
 	struct evdi_device *evdi = dev->dev_private;
 	struct drm_evdi_create_buff_callabck *cb_cmd;
 	int ret;
-	struct evdi_event *event = evdi_create_event(evdi, create_buf, cmd);
+	struct evdi_event *event = evdi_create_event(evdi, create_buf, cmd, file);
 	if (!event)
 		return -ENOMEM;
 
@@ -812,21 +813,15 @@ int evdi_gbm_create_buff (struct drm_device *dev, void *data,
 		goto err_event;
 	}
 
-	mutex_lock(&evdi->event_lock);
-	idr_remove(&evdi->event_idr, event->poll_id);
-	mutex_unlock(&evdi->event_lock);
 	kfree(cb_cmd);
-	kfree(event);
+	evdi_event_unlink_and_free(evdi, event);
 
 	return 0;
 
 err_event:
-	mutex_lock(&evdi->event_lock);
-	idr_remove(&evdi->event_idr, event->poll_id);
-	mutex_unlock(&evdi->event_lock);
 	if (event->reply_data)
 		kfree(event->reply_data);
-	kfree(event);
+	evdi_event_unlink_and_free(evdi, event);
 	return ret ? ret : -ETIMEDOUT;
 }
 
@@ -868,7 +863,8 @@ int evdi_poll_ioctl(struct drm_device *drm_dev, void *data,
 	}
 
 	event = list_first_entry(&evdi->event_queue, struct evdi_event, list);
-	list_del(&event->list);
+	list_del_init(&event->list);
+	event->on_queue = false;
 
 	mutex_unlock(&evdi->event_lock);
 
@@ -965,6 +961,30 @@ int evdi_poll_ioctl(struct drm_device *drm_dev, void *data,
 	}
 
 	return 0;
+}
+
+static void evdi_cancel_events_for_file(struct evdi_device *evdi,
+                                        struct drm_file *file)
+{
+	EVDI_INFO("Going to drain events\n");
+	struct evdi_event *event, *tmp;
+	mutex_lock(&evdi->event_lock);
+
+	list_for_each_entry_safe(event, tmp, &evdi->event_queue, list) {
+		if (event->owner != file)
+			continue;
+
+		event->result = -ECANCELED;
+		event->completed = true;
+
+		idr_remove(&evdi->event_idr, event->poll_id);
+		list_del_init(&event->list);
+		event->on_queue = false;
+		wake_up_all(&event->wait);
+		kfree(event);
+	}
+
+	mutex_unlock(&evdi->event_lock);
 }
 
 static void evdi_drm_device_release_cb(__always_unused struct drm_device *dev,
@@ -1079,6 +1099,7 @@ void evdi_driver_postclose(struct drm_device *dev, struct drm_file *file)
 
 	evdi_log_process(buf, sizeof(buf));
 	evdi_driver_close(dev, file);
+	evdi_cancel_events_for_file(dev->dev_private, file);
 	EVDI_INFO("(card%d) Closed by %s\n", dev->primary->index, buf);
 }
 

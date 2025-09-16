@@ -179,7 +179,7 @@ static int evdi_user_framebuffer_create_handle(struct drm_framebuffer *fb,
 					       unsigned int *handle)
 {
 	struct evdi_framebuffer *efb = to_evdi_fb(fb);
-
+	efb->owner = file_priv;
 	return drm_gem_handle_create(file_priv, &efb->obj->base, handle);
 }
 
@@ -200,7 +200,7 @@ static void evdi_user_framebuffer_destroy(struct drm_framebuffer *fb)
 #endif
 	drm_framebuffer_cleanup(fb);
 
-	event = evdi_create_event(evdi, destroy_buf, &efb->gralloc_buf_id);
+	event = evdi_create_event(evdi, destroy_buf, &efb->gralloc_buf_id, efb->owner);
 	if (!event)
 		return;
 
@@ -217,10 +217,7 @@ static void evdi_user_framebuffer_destroy(struct drm_framebuffer *fb)
 		return;
 	}
 
-	mutex_lock(&evdi->event_lock);
-	idr_remove(&evdi->event_idr, event->poll_id);
-	mutex_unlock(&evdi->event_lock);
-	kfree(event);
+	evdi_event_unlink_and_free(evdi, event);
 
 	kfree(efb);
 }

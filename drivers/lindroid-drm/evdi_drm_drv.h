@@ -81,6 +81,8 @@ struct evdi_event {
 	void *reply_data;
 	int poll_id;
 	wait_queue_head_t wait;
+	bool on_queue;
+	struct drm_file *owner;
 	bool completed;
 	int result;
 
@@ -108,6 +110,7 @@ struct evdi_framebuffer {
 	struct evdi_gem_object *obj;
 	bool active;
 	int gralloc_buf_id;
+	struct drm_file *owner;
 };
 
 #define MAX_DIRTS 16
@@ -158,7 +161,8 @@ struct evdi_gralloc_buf_user {
 #define to_evdi_fb(x) container_of(x, struct evdi_framebuffer, base)
 
 
-struct evdi_event *evdi_create_event(struct evdi_device *evdi, enum poll_event_type type, void *data);
+struct evdi_event *evdi_create_event(struct evdi_device *evdi, enum poll_event_type type, void *data, struct drm_file *file);
+void evdi_event_unlink_and_free(struct evdi_device *evdi, struct evdi_event *event);
 
 int evdi_poll_ioctl(struct drm_device *drm_dev, void *data,
                     struct drm_file *file);
