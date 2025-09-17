@@ -662,7 +662,7 @@ int evdi_gbm_add_buf_ioctl(struct drm_device *dev, void *data,
 	if (!event)
 		return -ENOMEM;
 
-	wake_up(&evdi->poll_ioct_wq);
+	wake_up_interruptible(&evdi->poll_ioct_wq);
 	ret = wait_for_completion_interruptible_timeout(&event->done, EVDI_WAIT_TIMEOUT);
 	if (ret == 0) {
 		EVDI_ERROR("evdi_gbm_add_buf_ioctl: wait timed out\n");
@@ -725,7 +725,7 @@ int evdi_gbm_get_buf_ioctl(struct drm_device *dev, void *data,
 	if (!event)
 		return -ENOMEM;
 
-	wake_up(&evdi->poll_ioct_wq);
+	wake_up_interruptible(&evdi->poll_ioct_wq);
 	ret = wait_for_completion_interruptible_timeout(&event->done, EVDI_WAIT_TIMEOUT);
 	if (ret == 0) {
 		EVDI_ERROR("evdi_gbm_get_buf_ioctl: wait timed out\n");
@@ -822,7 +822,7 @@ int evdi_gbm_del_buf_ioctl(struct drm_device *dev, void *data,
 	if (!event)
 		return -ENOMEM;
 
-	wake_up(&evdi->poll_ioct_wq);
+	wake_up_interruptible(&evdi->poll_ioct_wq);
 	ret = wait_for_completion_interruptible_timeout(&event->done, EVDI_WAIT_TIMEOUT);
 	if (ret == 0) {
 		EVDI_ERROR("evdi_gbm_del_buf_ioctl: wait timed out\n");
@@ -855,7 +855,7 @@ int evdi_gbm_create_buff (struct drm_device *dev, void *data,
 	if (!event)
 		return -ENOMEM;
 
-	wake_up(&evdi->poll_ioct_wq);
+	wake_up_interruptible(&evdi->poll_ioct_wq);
 	ret = wait_for_completion_interruptible_timeout(&event->done, EVDI_WAIT_TIMEOUT);
 	if (ret == 0) {
 		EVDI_ERROR("evdi_gbm_create_buff: wait timed out\n");
@@ -1166,7 +1166,7 @@ void evdi_driver_preclose(struct drm_device *drm_dev, struct drm_file *file)
 	struct evdi_device *evdi = drm_dev->dev_private;
 	if (evdi) {
 		atomic_set(&evdi->poll_stopping, 1);
-		wake_up_all(&evdi->poll_ioct_wq);
+		wake_up_interruptible_all(&evdi->poll_ioct_wq);
 		wake_up_all(&evdi->poll_response_ioct_wq);
 	}
 	evdi_driver_close(drm_dev, file);

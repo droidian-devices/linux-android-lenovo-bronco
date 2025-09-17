@@ -645,7 +645,7 @@ static int evdi_painter_disconnect(struct evdi_device *evdi,
 
 	if (evdi) {
 		atomic_set(&evdi->poll_stopping, 1);
-		wake_up_all(&evdi->poll_ioct_wq);
+		wake_up_interruptible_all(&evdi->poll_ioct_wq);
 		wake_up_all(&evdi->poll_response_ioct_wq);
 	}
 
