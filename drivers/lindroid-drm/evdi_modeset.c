@@ -117,9 +117,6 @@ static void evdi_crtc_atomic_flush(
 #else
 static void evdi_mark_full_screen_dirty(struct evdi_device *evdi)
 {
-	const struct drm_clip_rect rect =
-		evdi_painter_framebuffer_size(evdi->painter);
-	evdi_painter_mark_dirty(evdi, &rect);
 	evdi_painter_send_update_ready_if_needed(evdi->painter);
 }
 
@@ -296,11 +293,6 @@ static void evdi_plane_atomic_update(struct drm_plane *plane,
 	struct evdi_painter *painter;
 	struct drm_crtc *crtc;
 
-#if KERNEL_VERSION(5, 0, 0) <= LINUX_VERSION_CODE || defined(EL8)
-	struct drm_atomic_helper_damage_iter iter;
-	struct drm_rect rect;
-	struct drm_clip_rect clip_rect;
-#endif
 	if (!plane || !plane->state) {
 		EVDI_WARN("Plane state is null\n");
 		return;
@@ -326,10 +318,6 @@ static void evdi_plane_atomic_update(struct drm_plane *plane,
 		struct drm_framebuffer *old_fb = old_state->fb;
 		struct evdi_framebuffer *efb = to_evdi_fb(fb);
 
-		const struct drm_clip_rect fullscreen_rect = {
-			0, 0, fb->width, fb->height
-		};
-
 		if (!old_fb && crtc)
 			evdi_painter_force_full_modeset(painter);
 
@@ -343,27 +331,7 @@ static void evdi_plane_atomic_update(struct drm_plane *plane,
 
 			evdi_painter_set_scanout_buffer(painter, efb);
 
-#if KERNEL_VERSION(5, 0, 0) <= LINUX_VERSION_CODE || defined(EL8)
-			state->visible = true;
-			state->src.x1 = 0;
-			state->src.y1 = 0;
-			state->src.x2 = fb->width << 16;
-			state->src.y2 = fb->height << 16;
-
-			drm_atomic_helper_damage_iter_init(&iter, old_state, state);
-			while (drm_atomic_helper_damage_iter_next(&iter, &rect)) {
-				clip_rect.x1 = rect.x1;
-				clip_rect.y1 = rect.y1;
-				clip_rect.x2 = rect.x2;
-				clip_rect.y2 = rect.y2;
-				evdi_painter_mark_dirty(evdi, &clip_rect);
-			}
-#endif
-
 		};
-
-		if (evdi_painter_get_num_dirts(painter) == 0)
-			evdi_painter_mark_dirty(evdi, &fullscreen_rect);
 	}
 }
 
@@ -434,12 +402,9 @@ static void evdi_cursor_atomic_update(struct drm_plane *plane,
 				if (efb->obj->allow_sw_cursor_rect_updates) {
 					evdi_cursor_atomic_get_rect(&old_rect, old_state);
 					evdi_cursor_atomic_get_rect(&rect, state);
-
-					evdi_painter_mark_dirty(evdi, &old_rect);
 				} else {
 					rect = evdi_painter_framebuffer_size(evdi->painter);
 				}
-				evdi_painter_mark_dirty(evdi, &rect);
 			}
 			return;
 		}

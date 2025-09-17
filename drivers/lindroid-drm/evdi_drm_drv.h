@@ -188,10 +188,6 @@ int evdi_driver_open(struct drm_device *drm_dev, struct drm_file *file);
 void evdi_driver_preclose(struct drm_device *dev, struct drm_file *file_priv);
 void evdi_driver_postclose(struct drm_device *dev, struct drm_file *file_priv);
 
-#ifdef CONFIG_COMPAT
-long evdi_compat_ioctl(struct file *filp, unsigned int cmd, unsigned long arg);
-#endif
-
 struct drm_framebuffer *evdi_fb_user_fb_create(
 				struct drm_device *dev,
 				struct drm_file *file,
@@ -227,9 +223,6 @@ int evdi_gem_fault(struct vm_fault *vmf);
 
 bool evdi_painter_is_connected(struct evdi_painter *painter);
 void evdi_painter_close(struct evdi_device *evdi, struct drm_file *file);
-int evdi_painter_get_num_dirts(struct evdi_painter *painter);
-void evdi_painter_mark_dirty(struct evdi_device *evdi,
-			     const struct drm_clip_rect *rect);
 void evdi_painter_send_vblank(struct evdi_painter *painter);
 void evdi_painter_set_vblank(struct evdi_painter *painter,
 			     struct drm_crtc *crtc,
@@ -244,8 +237,6 @@ unsigned int evdi_painter_poll(struct file *filp,
 int evdi_painter_status_ioctl(struct drm_device *drm_dev, void *data,
 			      struct drm_file *file);
 int evdi_painter_connect_ioctl(struct drm_device *drm_dev, void *data,
-			       struct drm_file *file);
-int evdi_painter_grabpix_ioctl(struct drm_device *drm_dev, void *data,
 			       struct drm_file *file);
 int evdi_painter_request_update_ioctl(struct drm_device *drm_dev, void *data,
 				      struct drm_file *file);

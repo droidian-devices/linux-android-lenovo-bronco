@@ -89,7 +89,6 @@ static atomic_t evdi_event_cache_users = ATOMIC_INIT(0);
 struct drm_ioctl_desc evdi_painter_ioctls[] = {
 	DRM_IOCTL_DEF_DRV(EVDI_CONNECT, evdi_painter_connect_ioctl, EVDI_DRM_UNLOCKED),
 	DRM_IOCTL_DEF_DRV(EVDI_REQUEST_UPDATE, evdi_painter_request_update_ioctl, EVDI_DRM_UNLOCKED),
-	DRM_IOCTL_DEF_DRV(EVDI_GRABPIX, evdi_painter_grabpix_ioctl, EVDI_DRM_UNLOCKED),
 	DRM_IOCTL_DEF_DRV(EVDI_ENABLE_CURSOR_EVENTS, evdi_painter_enable_cursor_events_ioctl, EVDI_DRM_UNLOCKED),
 	DRM_IOCTL_DEF_DRV(EVDI_POLL, evdi_poll_ioctl, EVDI_DRM_UNLOCKED),
 	DRM_IOCTL_DEF_DRV(EVDI_SWAP_CALLBACK, evdi_swap_callback_ioctl, EVDI_DRM_UNLOCKED),
@@ -120,11 +119,6 @@ static const struct file_operations evdi_driver_fops = {
 	.read = drm_read,
 	.unlocked_ioctl = drm_ioctl,
 	.release = drm_release,
-
-#ifdef CONFIG_COMPAT
-	.compat_ioctl = evdi_compat_ioctl,
-#endif
-
 	.llseek = noop_llseek,
 
 #if defined(FOP_UNSIGNED_OFFSET)
