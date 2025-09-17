@@ -354,6 +354,22 @@ void evdi_event_unlink_and_free(struct evdi_device *evdi,
 	evdi_event_free(event);
 }
 
+static inline struct evdi_event *evdi_find_event(struct evdi_device *evdi, u32 poll_id)
+{
+	struct evdi_event *event;
+#if defined(EVDI_HAVE_XARRAY)
+	rcu_read_lock();
+	event = xa_load(&evdi->event_xa, poll_id);
+	rcu_read_unlock();
+	return event;
+#else
+	spin_lock(&evdi->event_lock);
+	event = idr_find(&evdi->event_idr, poll_id);
+	spin_unlock(&evdi->event_lock);
+	return event;
+#endif
+}
+
 int evdi_swap_callback_ioctl(struct drm_device *drm_dev, void *data,
                     struct drm_file *file)
 {
@@ -361,15 +377,7 @@ int evdi_swap_callback_ioctl(struct drm_device *drm_dev, void *data,
 	struct drm_evdi_add_buff_callabck *cmd = data;
 	struct evdi_event *event;
 
-#if defined(EVDI_HAVE_XARRAY)
-	rcu_read_lock();
-	event = xa_load(&evdi->event_xa, cmd->poll_id);
-	rcu_read_unlock();
-#else
-	spin_lock(&evdi->event_lock);
-	event = idr_find(&evdi->event_idr, cmd->poll_id);
-	spin_unlock(&evdi->event_lock);
-#endif
+	event = evdi_find_event(evdi, cmd->poll_id);
 
 	if (!event)
 		return -EINVAL;
@@ -387,15 +395,7 @@ int evdi_add_buff_callback_ioctl(struct drm_device *drm_dev, void *data,
 	struct evdi_event *event;
 	int *buff_id_ptr;
 
-#if defined(EVDI_HAVE_XARRAY)
-	rcu_read_lock();
-	event = xa_load(&evdi->event_xa, cmd->poll_id);
-	rcu_read_unlock();
-#else
-	spin_lock(&evdi->event_lock);
-	event = idr_find(&evdi->event_idr, cmd->poll_id);
-	spin_unlock(&evdi->event_lock);
-#endif
+	event = evdi_find_event(evdi, cmd->poll_id);
 
 	if (!event)
 		return -EINVAL;
@@ -420,15 +420,8 @@ int evdi_get_buff_callback_ioctl(struct drm_device *drm_dev, void *data,
 	struct evdi_gralloc_buf *gralloc_buf;
 	int *fd_ints = NULL;
 	int i;
-#if defined(EVDI_HAVE_XARRAY)
-	rcu_read_lock();
-	event = xa_load(&evdi->event_xa, cmd->poll_id);
-	rcu_read_unlock();
-#else
-	spin_lock(&evdi->event_lock);
-	event = idr_find(&evdi->event_idr, cmd->poll_id);
-	spin_unlock(&evdi->event_lock);
-#endif
+
+	event = evdi_find_event(evdi, cmd->poll_id);
 
 	if (!event)
 		return -EINVAL;
@@ -511,15 +504,9 @@ int evdi_destroy_buff_callback_ioctl(struct drm_device *drm_dev, void *data,
 	struct evdi_device *evdi = drm_dev->dev_private;
 	struct drm_evdi_add_buff_callabck *cmd = data;
 	struct evdi_event *event;
-#if defined(EVDI_HAVE_XARRAY)
-	rcu_read_lock();
-	event = xa_load(&evdi->event_xa, cmd->poll_id);
-	rcu_read_unlock();
-#else
-	spin_lock(&evdi->event_lock);
-	event = idr_find(&evdi->event_idr, cmd->poll_id);
-	spin_unlock(&evdi->event_lock);
-#endif
+
+	event = evdi_find_event(evdi, cmd->poll_id);
+
 	if (!event) {
 		EVDI_ERROR("evdi_destroy_buff_callback_ioctl: event is null\n");
 		return -EINVAL;
@@ -539,15 +526,9 @@ int evdi_create_buff_callback_ioctl(struct drm_device *drm_dev, void *data,
 	struct drm_evdi_create_buff_callabck *buf = kmemdup(data, sizeof(*buf), GFP_KERNEL);
 	if (!buf)
 		return -ENOMEM;
-#if defined(EVDI_HAVE_XARRAY)
-	rcu_read_lock();
-	event = xa_load(&evdi->event_xa, cmd->poll_id);
-	rcu_read_unlock();
-#else
-	spin_lock(&evdi->event_lock);
-	event = idr_find(&evdi->event_idr, cmd->poll_id);
-	spin_unlock(&evdi->event_lock);
-#endif
+
+	event = evdi_find_event(evdi, cmd->poll_id);
+
 	if (!event) {
 		kfree(buf);
 		return -EINVAL;
