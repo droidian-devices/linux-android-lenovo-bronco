@@ -21,6 +21,7 @@
 #include <linux/wait.h>
 #include <linux/slab.h>
 #include <linux/rcupdate.h>
+#include <linux/prefetch.h>
 #if KERNEL_VERSION(5, 16, 0) <= LINUX_VERSION_CODE || defined(EL8) || defined(EL9)
 #include <drm/drm_ioctl.h>
 #include <drm/drm_file.h>
@@ -157,25 +158,32 @@ static inline int evdi_prefault_writeable(void __user *uaddr, size_t len)
 static int evdi_copy_from_user_allow_partial(void *dst, const void __user *src, size_t len)
 {
 	size_t not;
+
 	if (!len)
 		return 0;
-	memset(dst, 0, len);
+
 	(void)evdi_prefault_readable(src, len);
+	prefetchw(dst);
 	not = copy_from_user(dst, src, len);
 	if (not == len)
 		return -EFAULT;
+
 	return 0;
 }
 
 static int evdi_copy_to_user_allow_partial(void __user *dst, const void *src, size_t len)
 {
 	size_t not;
+
 	if (!len)
 		return 0;
+
+	prefetch(src);
 	(void)evdi_prefault_writeable(dst, len);
 	not = copy_to_user(dst, src, len);
 	if (not == len)
 		return -EFAULT;
+
 	return 0;
 }
 
