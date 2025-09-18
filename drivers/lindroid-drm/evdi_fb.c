@@ -201,7 +201,7 @@ static void evdi_user_framebuffer_destroy(struct drm_framebuffer *fb)
 	if (!event)
 		return;
 
-	wake_up(&evdi->poll_ioct_wq);
+	wake_up_interruptible(&evdi->poll_ioct_wq);
 	ret = wait_for_completion_interruptible_timeout(&event->done, EVDI_WAIT_TIMEOUT);
 	if (ret < 0) {
 		EVDI_ERROR("evdi_gbm_add_buf_ioctl: wait_event_interruptible interrupted: %d\n", ret);
