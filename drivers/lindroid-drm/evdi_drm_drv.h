@@ -48,7 +48,7 @@
 #include "evdi_drm.h"
 #include "tests/evdi_test.h"
 
-#define EVDI_WAIT_TIMEOUT (5*HZ)
+#define EVDI_WAIT_TIMEOUT (10*HZ)
 
 struct evdi_fbdev;
 struct evdi_painter;
