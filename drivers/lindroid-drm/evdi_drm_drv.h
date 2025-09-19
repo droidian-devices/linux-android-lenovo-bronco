@@ -93,8 +93,6 @@ struct evdi_event {
 	int poll_id;
 	bool on_queue;
 	struct drm_file *owner;
-	struct completion done;
-	int result;
 
 	struct list_head list;
 	struct evdi_device *evdi;
