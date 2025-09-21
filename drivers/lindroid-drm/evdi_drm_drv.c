@@ -17,6 +17,7 @@
 #include <linux/fdtable.h>
 #include <linux/fs.h>
 #include <linux/version.h>
+#include <linux/compiler.h>
 #include <linux/sched/signal.h>
 #include <linux/wait.h>
 #include <linux/slab.h>
@@ -132,6 +133,8 @@ struct evdi_kreq {
 	atomic_t		waiter_gone;
 	int			result;
 	void			*reply;
+	int			reply_inline_id;
+	int			reply_inline_stride;
 };
 static struct kmem_cache *evdi_kreq_cache;
 
@@ -422,7 +425,6 @@ int evdi_add_buff_callback_ioctl(struct drm_device *drm_dev, void *data,
 	struct drm_evdi_add_buff_callabck *cmd = data;
 	struct evdi_event *event = evdi_find_event(evdi, cmd->poll_id);
 	struct evdi_kreq *kreq;
-	int *buff_id_ptr;
 
 
 	if (unlikely(!event))
@@ -434,18 +436,11 @@ int evdi_add_buff_callback_ioctl(struct drm_device *drm_dev, void *data,
 		return 0;
 	}
 
-	buff_id_ptr = kzalloc(sizeof(int), GFP_KERNEL);
-	if (unlikely(!buff_id_ptr))
-		return -ENOMEM;
-
-	*buff_id_ptr = cmd->buff_id;
-	kreq->reply = buff_id_ptr;
+	kreq->reply_inline_id = cmd->buff_id;
+	kreq->reply = NULL;
 	kreq->result = 0;
+	smp_wmb();
 	complete(&kreq->done);
-	if (atomic_read(&kreq->waiter_gone)) {
-		kfree(buff_id_ptr);
-		kreq->reply = NULL;
-	}
 	if (refcount_dec_and_test(&kreq->refs))
 		kmem_cache_free(evdi_kreq_cache, kreq);
 
@@ -526,6 +521,7 @@ int evdi_get_buff_callback_ioctl(struct drm_device *drm_dev, void *data,
 
 	kreq->reply = gralloc_buf;
 	kreq->result = 0;
+	smp_wmb();
 	complete(&kreq->done);
 	if (atomic_read(&kreq->waiter_gone)) {
 		for (i = 0; i < gralloc_buf->numFds; i++)
@@ -561,6 +557,7 @@ int evdi_destroy_buff_callback_ioctl(struct drm_device *drm_dev, void *data,
 
 	kreq->result = 0;
 	kreq->reply = NULL;
+	smp_wmb();
 	complete(&kreq->done);
 	if (refcount_dec_and_test(&kreq->refs))
 		kmem_cache_free(evdi_kreq_cache, kreq);
@@ -574,33 +571,25 @@ int evdi_create_buff_callback_ioctl(struct drm_device *drm_dev, void *data,
 {
 	struct evdi_device *evdi = drm_dev->dev_private;
 	struct drm_evdi_create_buff_callabck *cmd = data;
-	struct drm_evdi_create_buff_callabck *buf = kmemdup(data, sizeof(*buf), GFP_KERNEL);
 	struct evdi_event *event;
 	struct evdi_kreq *kreq;
-	if (!buf)
-		return -ENOMEM;
 
 	event = evdi_find_event(evdi, cmd->poll_id);
 
-	if (unlikely(!event)) {
-		kfree(buf);
+	if (unlikely(!event))
 		return -EINVAL;
-	}
 
 	kreq = (struct evdi_kreq *)event->reply_data;
 	if (unlikely(!kreq)) {
-		kfree(buf);
 		evdi_event_unlink_and_free(evdi, event);
 		return 0;
 	}
 
+	kreq->reply_inline_id = cmd->id;
+	kreq->reply_inline_stride = cmd->stride;
+	kreq->reply = NULL;
 	kreq->result = 0;
-	kreq->reply = buf;
 	complete(&kreq->done);
-	if (atomic_read(&kreq->waiter_gone)) {
-		kfree(buf);
-		kreq->reply = NULL;
-	}
 	if (refcount_dec_and_test(&kreq->refs))
 		kmem_cache_free(evdi_kreq_cache, kreq);
 
@@ -756,10 +745,8 @@ int evdi_gbm_add_buf_ioctl(struct drm_device *dev, void *data,
 		}
 		return err;
 	}
-	if (kreq->reply) {
-		cmd->id = *((int *)kreq->reply);
-		kfree(kreq->reply);
-	}
+	cmd->id = READ_ONCE(kreq->reply_inline_id);
+
 	if (refcount_dec_and_test(&kreq->refs))
 		kmem_cache_free(evdi_kreq_cache, kreq);
 
@@ -940,10 +927,9 @@ int evdi_gbm_del_buf_ioctl(struct drm_device *dev, void *data,
 int evdi_gbm_create_buff (struct drm_device *dev, void *data,
 					struct drm_file *file)
 {
-	int ret;
+	int ret, id_inline, stride_inline;
 	struct drm_evdi_gbm_create_buff *cmd = data;
 	struct evdi_device *evdi = dev->dev_private;
-	struct drm_evdi_create_buff_callabck *cb_cmd;
 	struct evdi_event *event = evdi_create_event(evdi, create_buf, cmd, file);
 	struct evdi_kreq *kreq;
 	if (unlikely(!event))
@@ -980,23 +966,19 @@ int evdi_gbm_create_buff (struct drm_device *dev, void *data,
 		}
 		return ret;
 	}
-	cb_cmd = (struct drm_evdi_create_buff_callabck *)kreq->reply;
-	if (evdi_copy_to_user_allow_partial((void __user *)cmd->id, &cb_cmd->id, sizeof(int)) ||
-	    evdi_copy_to_user_allow_partial((void __user *)cmd->stride, &cb_cmd->stride, sizeof(int))) {
+	id_inline     = READ_ONCE(kreq->reply_inline_id);
+	stride_inline = READ_ONCE(kreq->reply_inline_stride);
+	if (evdi_copy_to_user_allow_partial((void __user *)cmd->id, &id_inline, sizeof(int)) ||
+	    evdi_copy_to_user_allow_partial((void __user *)cmd->stride, &stride_inline, sizeof(int))) {
 		ret = -EFAULT;
 		goto err_event;
 	}
-
-	kfree(cb_cmd);
 	if (refcount_dec_and_test(&kreq->refs))
 		kmem_cache_free(evdi_kreq_cache, kreq);
 
 	return 0;
 
 err_event:
-	if (cb_cmd) {
-		kfree(cb_cmd);
-	}
 	atomic_set(&kreq->waiter_gone, 1);
 	if (refcount_dec_and_test(&kreq->refs)) {
 		kmem_cache_free(evdi_kreq_cache, kreq);
