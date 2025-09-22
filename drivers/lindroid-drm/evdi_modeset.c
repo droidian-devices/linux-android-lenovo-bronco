@@ -30,7 +30,6 @@
 #include <drm/drm_atomic_helper.h>
 #include "evdi_drm.h"
 #include "evdi_drm_drv.h"
-#include "evdi_cursor.h"
 #include "evdi_params.h"
 #include "evdi_debug.h"
 #if KERNEL_VERSION(5, 13, 0) <= LINUX_VERSION_CODE || defined(EL8)
@@ -113,88 +112,6 @@ static void evdi_crtc_atomic_flush(
 	crtc_state->event = NULL;
 }
 
-#if KERNEL_VERSION(5, 10, 0) <= LINUX_VERSION_CODE || defined(EL8)
-#else
-static void evdi_mark_full_screen_dirty(struct evdi_device *evdi)
-{
-	evdi_painter_send_update_ready_if_needed(evdi->painter);
-}
-
-static int evdi_crtc_cursor_set(struct drm_crtc *crtc,
-				struct drm_file *file,
-				uint32_t handle,
-				uint32_t width,
-				uint32_t height,
-				int32_t hot_x,
-				int32_t hot_y)
-{
-	struct drm_device *dev = crtc->dev;
-	struct evdi_device *evdi = dev->dev_private;
-	struct drm_gem_object *obj = NULL;
-	struct evdi_gem_object *eobj = NULL;
-	/*
-	 * evdi_crtc_cursor_set is callback function using
-	 * deprecated cursor entry point.
-	 * There is no info about underlaying pixel format.
-	 * Hence we are assuming that it is in ARGB 32bpp format.
-	 * This format it the only one supported in cursor composition
-	 * function.
-	 * This format is also enforced during framebuffer creation.
-	 *
-	 * Proper format will be available when driver start support
-	 * universal planes for cursor.
-	 */
-	uint32_t format = DRM_FORMAT_ARGB8888;
-	uint32_t stride = 4 * width;
-
-	EVDI_CHECKPT();
-	if (handle) {
-		mutex_lock(&dev->struct_mutex);
-		obj = drm_gem_object_lookup(file, handle);
-		if (obj)
-			eobj = to_evdi_bo(obj);
-		else
-			EVDI_ERROR("Failed to lookup gem object.\n");
-		mutex_unlock(&dev->struct_mutex);
-	}
-
-	evdi_cursor_set(evdi->cursor,
-			eobj, width, height, hot_x, hot_y,
-			format, stride);
-	#if KERNEL_VERSION(5, 9, 0) <= LINUX_VERSION_CODE || defined(EL8)
-	drm_gem_object_put(obj);
-	#else
-	drm_gem_object_put_unlocked(obj);
-	#endif
-
-	/*
-	 * For now we don't care whether the application wanted the mouse set,
-	 * or not.
-	 */
-	if (evdi->cursor_events_enabled)
-		evdi_painter_send_cursor_set(evdi->painter, evdi->cursor);
-	else
-		evdi_mark_full_screen_dirty(evdi);
-	return 0;
-}
-
-static int evdi_crtc_cursor_move(struct drm_crtc *crtc, int x, int y)
-{
-	struct drm_device *dev = crtc->dev;
-	struct evdi_device *evdi = dev->dev_private;
-
-	EVDI_CHECKPT();
-	evdi_cursor_move(evdi->cursor, x, y);
-
-	if (evdi->cursor_events_enabled)
-		evdi_painter_send_cursor_move(evdi->painter, evdi->cursor);
-	else
-		evdi_mark_full_screen_dirty(evdi);
-
-	return 0;
-}
-#endif
-
 static struct drm_crtc_helper_funcs evdi_helper_funcs = {
 	.mode_set_nofb  = evdi_crtc_set_nofb,
 	.atomic_flush   = evdi_crtc_atomic_flush,
@@ -249,11 +166,6 @@ static const struct drm_crtc_funcs evdi_crtc_funcs = {
 	.atomic_duplicate_state = drm_atomic_helper_crtc_duplicate_state,
 	.atomic_destroy_state   = drm_atomic_helper_crtc_destroy_state,
 
-#if KERNEL_VERSION(5, 10, 0) <= LINUX_VERSION_CODE || defined(EL8)
-#else
-	.cursor_set2            = evdi_crtc_cursor_set,
-	.cursor_move            = evdi_crtc_cursor_move,
-#endif
 #if KERNEL_VERSION(5, 11, 0) <= LINUX_VERSION_CODE || defined(RPI) || defined(EL8)
 	.enable_vblank          = evdi_enable_vblank,
 	.disable_vblank         = evdi_disable_vblank,
@@ -319,100 +231,8 @@ static void evdi_plane_atomic_update(struct drm_plane *plane,
 	}
 }
 
-static void evdi_cursor_atomic_get_rect(struct drm_clip_rect *rect,
-					struct drm_plane_state *state)
-{
-	rect->x1 = (state->crtc_x < 0) ? 0 : state->crtc_x;
-	rect->y1 = (state->crtc_y < 0) ? 0 : state->crtc_y;
-	rect->x2 = state->crtc_x + state->crtc_w;
-	rect->y2 = state->crtc_y + state->crtc_h;
-}
-
-static void evdi_cursor_atomic_update(struct drm_plane *plane,
-#if KERNEL_VERSION(5, 13, 0) <= LINUX_VERSION_CODE || defined(EL8)
-				     struct drm_atomic_state *atom_state
-#else
-				     struct drm_plane_state *old_state
-#endif
-		)
-{
-#if KERNEL_VERSION(5, 13, 0) <= LINUX_VERSION_CODE || defined(EL8)
-	struct drm_plane_state *old_state = drm_atomic_get_old_plane_state(atom_state, plane);
-
-#else
-#endif
-	if (plane && plane->state && plane->dev && plane->dev->dev_private) {
-		struct drm_plane_state *state = plane->state;
-		struct evdi_device *evdi = plane->dev->dev_private;
-		struct drm_framebuffer *fb = state->fb;
-		struct evdi_framebuffer *efb = to_evdi_fb(fb);
-
-		struct drm_clip_rect old_rect;
-		struct drm_clip_rect rect;
-		bool cursor_changed = false;
-		bool cursor_position_changed = false;
-		int32_t cursor_position_x = 0;
-		int32_t cursor_position_y = 0;
-
-		mutex_lock(&plane->dev->struct_mutex);
-
-		evdi_cursor_position(evdi->cursor, &cursor_position_x,
-		&cursor_position_y);
-		evdi_cursor_move(evdi->cursor, state->crtc_x, state->crtc_y);
-		cursor_position_changed = cursor_position_x != state->crtc_x ||
-					  cursor_position_y != state->crtc_y;
-
-		if (fb != old_state->fb) {
-			if (fb != NULL) {
-				uint32_t stride = 4 * fb->width;
-
-				evdi_cursor_set(evdi->cursor,
-						efb->obj,
-						fb->width,
-						fb->height,
-						0,
-						0,
-						fb->format->format,
-						stride);
-			}
-
-			evdi_cursor_enable(evdi->cursor, fb != NULL);
-			cursor_changed = true;
-		}
-
-		mutex_unlock(&plane->dev->struct_mutex);
-		if (!evdi->cursor_events_enabled) {
-			if (fb != NULL) {
-				if (efb->obj->allow_sw_cursor_rect_updates) {
-					evdi_cursor_atomic_get_rect(&old_rect, old_state);
-					evdi_cursor_atomic_get_rect(&rect, state);
-				} else {
-					rect = evdi_painter_framebuffer_size(evdi->painter);
-				}
-			}
-			return;
-		}
-
-		if (cursor_changed)
-			evdi_painter_send_cursor_set(evdi->painter,
-						     evdi->cursor);
-		if (cursor_position_changed)
-			evdi_painter_send_cursor_move(evdi->painter,
-						      evdi->cursor);
-	}
-}
-
 static const struct drm_plane_helper_funcs evdi_plane_helper_funcs = {
 	.atomic_update = evdi_plane_atomic_update,
-#if KERNEL_VERSION(5, 13, 0) <= LINUX_VERSION_CODE || defined(EL8)
-	.prepare_fb = drm_gem_plane_helper_prepare_fb
-#else
-	.prepare_fb = drm_gem_fb_prepare_fb
-#endif
-};
-
-static const struct drm_plane_helper_funcs evdi_cursor_helper_funcs = {
-	.atomic_update = evdi_cursor_atomic_update,
 #if KERNEL_VERSION(5, 13, 0) <= LINUX_VERSION_CODE || defined(EL8)
 	.prepare_fb = drm_gem_plane_helper_prepare_fb
 #else
@@ -443,7 +263,7 @@ static struct drm_plane *evdi_create_plane(
 {
 	struct drm_plane *plane;
 	int ret;
-	char *plane_type = (type == DRM_PLANE_TYPE_CURSOR) ? "cursor" : "primary";
+	char *plane_type = "primary";
 
 	plane = kzalloc(sizeof(*plane), GFP_KERNEL);
 	if (plane == NULL) {
@@ -478,7 +298,6 @@ static int evdi_crtc_init(struct drm_device *dev)
 {
 	struct drm_crtc *crtc = NULL;
 	struct drm_plane *primary_plane = NULL;
-	struct drm_plane *cursor_plane = NULL;
 	int status = 0;
 
 	EVDI_CHECKPT();
@@ -489,17 +308,12 @@ static int evdi_crtc_init(struct drm_device *dev)
 	primary_plane = evdi_create_plane(dev, DRM_PLANE_TYPE_PRIMARY,
 					  &evdi_plane_helper_funcs);
 
-#if KERNEL_VERSION(5, 10, 0) <= LINUX_VERSION_CODE || defined(EL8)
-	cursor_plane = evdi_create_plane(dev, DRM_PLANE_TYPE_CURSOR,
-						&evdi_cursor_helper_funcs);
-#endif
-
 #if KERNEL_VERSION(5, 0, 0) <= LINUX_VERSION_CODE || defined(EL8)
 	drm_plane_enable_fb_damage_clips(primary_plane);
 #endif
 
 	status = drm_crtc_init_with_planes(dev, crtc,
-					   primary_plane, cursor_plane,
+					   primary_plane, NULL,
 					   &evdi_crtc_funcs,
 					   NULL
 					   );

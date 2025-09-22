@@ -56,8 +56,6 @@ struct evdi_painter;
 struct evdi_device {
 	struct drm_device *ddev;
 	struct drm_connector *conn;
-	struct evdi_cursor *cursor;
-	bool cursor_events_enabled;
 
 	uint32_t pixel_area_limit;
 	uint32_t pixel_per_second_limit;
@@ -110,7 +108,6 @@ struct evdi_gem_object {
 	bool vmap_is_iomem;
 #endif
 	struct sg_table *sg;
-	bool allow_sw_cursor_rect_updates;
 };
 
 #define to_evdi_bo(x) container_of(x, struct evdi_gem_object, base)
@@ -240,8 +237,6 @@ int evdi_painter_connect_ioctl(struct drm_device *drm_dev, void *data,
 			       struct drm_file *file);
 int evdi_painter_request_update_ioctl(struct drm_device *drm_dev, void *data,
 				      struct drm_file *file);
-int evdi_painter_enable_cursor_events_ioctl(struct drm_device *drm_dev, void *data,
-					  struct drm_file *file);
 
 int evdi_painter_init(struct evdi_device *evdi);
 void evdi_painter_cleanup(struct evdi_painter *painter);
@@ -255,10 +250,6 @@ struct drm_clip_rect evdi_framebuffer_sanitize_rect(
 struct drm_device *evdi_drm_device_create(struct device *parent);
 int evdi_drm_device_remove(struct drm_device *dev);
 
-void evdi_painter_send_cursor_set(struct evdi_painter *painter,
-				  struct evdi_cursor *cursor);
-void evdi_painter_send_cursor_move(struct evdi_painter *painter,
-				   struct evdi_cursor *cursor);
 bool evdi_painter_needs_full_modeset(struct evdi_painter *painter);
 void evdi_painter_force_full_modeset(struct evdi_painter *painter);
 struct drm_clip_rect evdi_painter_framebuffer_size(struct evdi_painter *painter);

@@ -41,7 +41,6 @@
 #include <drm/drm_atomic_helper.h>
 #include "evdi_drm_drv.h"
 #include "evdi_platform_drv.h"
-#include "evdi_cursor.h"
 #include "evdi_debug.h"
 #include "evdi_drm.h"
 
@@ -90,7 +89,6 @@ static atomic_t evdi_event_cache_users = ATOMIC_INIT(0);
 struct drm_ioctl_desc evdi_painter_ioctls[] = {
 	DRM_IOCTL_DEF_DRV(EVDI_CONNECT, evdi_painter_connect_ioctl, EVDI_DRM_UNLOCKED),
 	DRM_IOCTL_DEF_DRV(EVDI_REQUEST_UPDATE, evdi_painter_request_update_ioctl, EVDI_DRM_UNLOCKED),
-	DRM_IOCTL_DEF_DRV(EVDI_ENABLE_CURSOR_EVENTS, evdi_painter_enable_cursor_events_ioctl, EVDI_DRM_UNLOCKED),
 	DRM_IOCTL_DEF_DRV(EVDI_POLL, evdi_poll_ioctl, EVDI_DRM_UNLOCKED),
 	DRM_IOCTL_DEF_DRV(EVDI_SWAP_CALLBACK, evdi_swap_callback_ioctl, EVDI_DRM_UNLOCKED),
 	DRM_IOCTL_DEF_DRV(EVDI_ADD_BUFF_CALLBACK, evdi_add_buff_callback_ioctl, EVDI_DRM_UNLOCKED),
@@ -1174,7 +1172,6 @@ static void evdi_drm_device_release_cb(__always_unused struct drm_device *dev,
 {
 	struct evdi_device *evdi = dev->dev_private;
 
-	evdi_cursor_free(evdi->cursor);
 	evdi_painter_cleanup(evdi->painter);
 	kfree(evdi);
 	dev->dev_private = NULL;
@@ -1196,7 +1193,6 @@ static int evdi_drm_device_init(struct drm_device *dev)
 
 	evdi->ddev = dev;
 	evdi->dev_index = dev->primary->index;
-	evdi->cursor_events_enabled = false;
 	dev->dev_private = evdi;
 	evdi->poll_event = none;
 	init_waitqueue_head(&evdi->poll_ioct_wq);
@@ -1222,9 +1218,6 @@ static int evdi_drm_device_init(struct drm_device *dev)
 	ret = evdi_painter_init(evdi);
 	if (ret)
 		goto err_free;
-	ret =  evdi_cursor_init(&evdi->cursor);
-	if (ret)
-		goto err_free;
 
 	evdi_modeset_init(dev);
 
@@ -1244,7 +1237,6 @@ static int evdi_drm_device_init(struct drm_device *dev)
 err_init:
 err_free:
 	EVDI_ERROR("Failed to setup drm device %d\n", ret);
-	evdi_cursor_free(evdi->cursor);
 	kfree(evdi->painter);
 	kfree(evdi);
 	dev->dev_private = NULL;
