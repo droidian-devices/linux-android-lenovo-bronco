@@ -20,7 +20,6 @@
 #endif
 #include "evdi_drm.h"
 #include "evdi_drm_drv.h"
-#include "evdi_cursor.h"
 #include "evdi_params.h"
 #include <linux/atomic.h>
 #include <linux/mutex.h>
@@ -42,16 +41,6 @@ MODULE_IMPORT_NS("DMA_BUF");
 #if KERNEL_VERSION(5, 1, 0) <= LINUX_VERSION_CODE || defined(EL8)
 #include <drm/drm_probe_helper.h>
 #endif
-
-struct evdi_event_cursor_set_pending {
-	struct drm_pending_event base;
-	struct drm_evdi_event_cursor_set cursor_set;
-};
-
-struct evdi_event_cursor_move_pending {
-	struct drm_pending_event base;
-	struct drm_evdi_event_cursor_move cursor_move;
-};
 
 struct evdi_event_update_ready_pending {
 	struct drm_pending_event base;
@@ -90,12 +79,6 @@ bool evdi_painter_is_connected(struct evdi_painter *painter)
 	return painter ? painter->is_connected : false;
 }
 
-static bool is_evdi_event_squashable(struct drm_pending_event *event)
-{
-	return event->event->type == DRM_EVDI_EVENT_CURSOR_SET ||
-	       event->event->type == DRM_EVDI_EVENT_CURSOR_MOVE;
-}
-
 static void evdi_painter_add_event_to_pending_list(
 	struct evdi_painter *painter,
 	struct drm_pending_event *event)
@@ -112,13 +95,7 @@ static void evdi_painter_add_event_to_pending_list(
 		  list_last_entry(list, struct drm_pending_event, link);
 	}
 
-	if (last_event &&
-	    event->event->type == last_event->event->type &&
-	    is_evdi_event_squashable(event)) {
-		list_replace(&last_event->link, &event->link);
-		kfree(last_event);
-	} else
-		list_add_tail(&event->link, list);
+	list_add_tail(&event->link, list);
 
 	spin_unlock_irqrestore(&painter->drm_device->event_lock, flags);
 }
@@ -208,110 +185,6 @@ static struct drm_pending_event *create_update_ready_event(void)
 static void evdi_painter_send_update_ready(struct evdi_painter *painter)
 {
 	struct drm_pending_event *event = create_update_ready_event();
-
-	evdi_painter_send_event(painter, event);
-}
-
-static uint32_t evdi_painter_get_gem_handle(struct evdi_painter *painter,
-					   struct evdi_gem_object *obj)
-{
-	uint32_t handle = 0;
-
-	if (!obj)
-		return 0;
-
-	handle = evdi_gem_object_handle_lookup(painter->drm_filp, &obj->base);
-
-	if (handle)
-		return handle;
-
-	if (drm_gem_handle_create(painter->drm_filp,
-			      &obj->base, &handle)) {
-		EVDI_ERROR("Failed to create gem handle for %p\n",
-			painter->drm_filp);
-	}
-
-	return handle;
-}
-
-static struct drm_pending_event *create_cursor_set_event(
-		struct evdi_painter *painter,
-		struct evdi_cursor *cursor)
-{
-	struct evdi_event_cursor_set_pending *event;
-	struct evdi_gem_object *eobj = NULL;
-
-	event = kzalloc(sizeof(*event), GFP_KERNEL);
-	if (!event) {
-		EVDI_ERROR("Failed to create cursor set event");
-		return NULL;
-	}
-
-	event->cursor_set.base.type = DRM_EVDI_EVENT_CURSOR_SET;
-	event->cursor_set.base.length = sizeof(event->cursor_set);
-
-	evdi_cursor_lock(cursor);
-	event->cursor_set.enabled = evdi_cursor_enabled(cursor);
-	evdi_cursor_hotpoint(cursor, &event->cursor_set.hot_x,
-				     &event->cursor_set.hot_y);
-	evdi_cursor_size(cursor,
-		&event->cursor_set.width,
-		&event->cursor_set.height);
-	evdi_cursor_format(cursor, &event->cursor_set.pixel_format);
-	evdi_cursor_stride(cursor, &event->cursor_set.stride);
-	eobj = evdi_cursor_gem(cursor);
-	event->cursor_set.buffer_handle =
-		evdi_painter_get_gem_handle(painter, eobj);
-	if (eobj)
-		event->cursor_set.buffer_length = eobj->base.size;
-	if (!event->cursor_set.buffer_handle) {
-		event->cursor_set.enabled = false;
-		event->cursor_set.buffer_length = 0;
-	}
-	evdi_cursor_unlock(cursor);
-
-	event->base.event = &event->cursor_set.base;
-	return &event->base;
-}
-
-void evdi_painter_send_cursor_set(struct evdi_painter *painter,
-				  struct evdi_cursor *cursor)
-{
-	struct drm_pending_event *event =
-		create_cursor_set_event(painter, cursor);
-
-	evdi_painter_send_event(painter, event);
-}
-
-static struct drm_pending_event *create_cursor_move_event(
-		struct evdi_cursor *cursor)
-{
-	struct evdi_event_cursor_move_pending *event;
-
-	event = kzalloc(sizeof(*event), GFP_KERNEL);
-	if (!event) {
-		EVDI_ERROR("Failed to create cursor move event");
-		return NULL;
-	}
-
-	event->cursor_move.base.type = DRM_EVDI_EVENT_CURSOR_MOVE;
-	event->cursor_move.base.length = sizeof(event->cursor_move);
-
-	evdi_cursor_lock(cursor);
-	evdi_cursor_position(
-		cursor,
-		&event->cursor_move.x,
-		&event->cursor_move.y);
-	evdi_cursor_unlock(cursor);
-
-	event->base.event = &event->cursor_move.base;
-	return &event->base;
-}
-
-void evdi_painter_send_cursor_move(struct evdi_painter *painter,
-				   struct evdi_cursor *cursor)
-{
-	struct drm_pending_event *event = create_cursor_move_event(cursor);
 
 	evdi_painter_send_event(painter, event);
 }
@@ -634,12 +507,9 @@ static int evdi_painter_disconnect(struct evdi_device *evdi,
 
 	evdi_painter_send_vblank(painter);
 
-	evdi_cursor_enable(evdi->cursor, false);
-
 	painter->drm_filp = NULL;
 
 	painter->was_update_requested = false;
-	evdi->cursor_events_enabled = false;
 
 	painter_unlock(painter);
 
@@ -821,15 +691,4 @@ void evdi_painter_force_full_modeset(struct evdi_painter *painter)
 {
 	if (painter)
 		painter->needs_full_modeset = true;
-}
-
-int evdi_painter_enable_cursor_events_ioctl(struct drm_device *drm_dev, void *data,
-					__always_unused struct drm_file *file)
-{
-	struct evdi_device *evdi = drm_dev->dev_private;
-	struct drm_evdi_enable_cursor_events *cmd = data;
-
-	evdi->cursor_events_enabled = cmd->enable;
-
-	return 0;
 }

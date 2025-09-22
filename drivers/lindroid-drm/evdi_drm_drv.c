@@ -17,6 +17,7 @@
 #include <linux/fdtable.h>
 #include <linux/fs.h>
 #include <linux/version.h>
+#include <linux/compiler.h>
 #include <linux/sched/signal.h>
 #include <linux/wait.h>
 #include <linux/slab.h>
@@ -41,7 +42,6 @@
 #include <drm/drm_atomic_helper.h>
 #include "evdi_drm_drv.h"
 #include "evdi_platform_drv.h"
-#include "evdi_cursor.h"
 #include "evdi_debug.h"
 #include "evdi_drm.h"
 
@@ -90,7 +90,6 @@ static atomic_t evdi_event_cache_users = ATOMIC_INIT(0);
 struct drm_ioctl_desc evdi_painter_ioctls[] = {
 	DRM_IOCTL_DEF_DRV(EVDI_CONNECT, evdi_painter_connect_ioctl, EVDI_DRM_UNLOCKED),
 	DRM_IOCTL_DEF_DRV(EVDI_REQUEST_UPDATE, evdi_painter_request_update_ioctl, EVDI_DRM_UNLOCKED),
-	DRM_IOCTL_DEF_DRV(EVDI_ENABLE_CURSOR_EVENTS, evdi_painter_enable_cursor_events_ioctl, EVDI_DRM_UNLOCKED),
 	DRM_IOCTL_DEF_DRV(EVDI_POLL, evdi_poll_ioctl, EVDI_DRM_UNLOCKED),
 	DRM_IOCTL_DEF_DRV(EVDI_SWAP_CALLBACK, evdi_swap_callback_ioctl, EVDI_DRM_UNLOCKED),
 	DRM_IOCTL_DEF_DRV(EVDI_ADD_BUFF_CALLBACK, evdi_add_buff_callback_ioctl, EVDI_DRM_UNLOCKED),
@@ -134,6 +133,8 @@ struct evdi_kreq {
 	atomic_t		waiter_gone;
 	int			result;
 	void			*reply;
+	int			reply_inline_id;
+	int			reply_inline_stride;
 };
 static struct kmem_cache *evdi_kreq_cache;
 
@@ -271,7 +272,7 @@ struct evdi_event *evdi_create_event(struct evdi_device *evdi, enum poll_event_t
 	struct evdi_event *event;
 
 	event = kmem_cache_zalloc(evdi_event_cache, GFP_KERNEL);
-	if (!event)
+	if (unlikely(!event))
 		return NULL;
 
 	INIT_LIST_HEAD(&event->list);
@@ -367,7 +368,11 @@ void evdi_event_unlink_and_free(struct evdi_device *evdi,
 		event->on_queue = false;
 	}
 	spin_unlock(&evdi->event_lock);
+#if defined(EVDI_HAVE_XARRAY)
+	kfree_rcu(event, rcu);
+#else
 	evdi_event_free(event);
+#endif
 }
 
 static inline struct evdi_event *evdi_find_event(struct evdi_device *evdi, u32 poll_id)
@@ -394,7 +399,7 @@ int evdi_swap_callback_ioctl(struct drm_device *drm_dev, void *data,
 	struct evdi_event *event = evdi_find_event(evdi, cmd->poll_id);
 	struct evdi_kreq *kreq;
 
-	if (!event)
+	if (unlikely(!event))
 		return -EINVAL;
 
 	kreq = (struct evdi_kreq *)event->reply_data;
@@ -420,30 +425,22 @@ int evdi_add_buff_callback_ioctl(struct drm_device *drm_dev, void *data,
 	struct drm_evdi_add_buff_callabck *cmd = data;
 	struct evdi_event *event = evdi_find_event(evdi, cmd->poll_id);
 	struct evdi_kreq *kreq;
-	int *buff_id_ptr;
 
 
-	if (!event)
+	if (unlikely(!event))
 		return -EINVAL;
 
 	kreq = (struct evdi_kreq *)event->reply_data;
-	if (!kreq) {
+	if (unlikely(!kreq)) {
 		evdi_event_unlink_and_free(evdi, event);
 		return 0;
 	}
 
-	buff_id_ptr = kzalloc(sizeof(int), GFP_KERNEL);
-	if (!buff_id_ptr)
-		return -ENOMEM;
-
-	*buff_id_ptr = cmd->buff_id;
-	kreq->reply = buff_id_ptr;
+	kreq->reply_inline_id = cmd->buff_id;
+	kreq->reply = NULL;
 	kreq->result = 0;
+	smp_wmb();
 	complete(&kreq->done);
-	if (atomic_read(&kreq->waiter_gone)) {
-		kfree(buff_id_ptr);
-		kreq->reply = NULL;
-	}
 	if (refcount_dec_and_test(&kreq->refs))
 		kmem_cache_free(evdi_kreq_cache, kreq);
 
@@ -464,7 +461,7 @@ int evdi_get_buff_callback_ioctl(struct drm_device *drm_dev, void *data,
 	size_t ints_sz, files_sz;
 	void *mem;
 
-	if (!event)
+	if (unlikely(!event))
 		return -EINVAL;
 
 	if (cmd->numFds < 0 || cmd->numInts < 0 ||
@@ -524,6 +521,7 @@ int evdi_get_buff_callback_ioctl(struct drm_device *drm_dev, void *data,
 
 	kreq->reply = gralloc_buf;
 	kreq->result = 0;
+	smp_wmb();
 	complete(&kreq->done);
 	if (atomic_read(&kreq->waiter_gone)) {
 		for (i = 0; i < gralloc_buf->numFds; i++)
@@ -546,19 +544,20 @@ int evdi_destroy_buff_callback_ioctl(struct drm_device *drm_dev, void *data,
 	struct evdi_event *event = evdi_find_event(evdi, cmd->poll_id);
 	struct evdi_kreq *kreq;
 
-	if (!event) {
+	if (unlikely(!event)) {
 		EVDI_ERROR("evdi_destroy_buff_callback_ioctl: event is null\n");
 		return -EINVAL;
 	}
 
 	kreq = (struct evdi_kreq *)event->reply_data;
-	if (!kreq) {
+	if (unlikely(!kreq)) {
 		evdi_event_unlink_and_free(evdi, event);
 		return 0;
 	}
 
 	kreq->result = 0;
 	kreq->reply = NULL;
+	smp_wmb();
 	complete(&kreq->done);
 	if (refcount_dec_and_test(&kreq->refs))
 		kmem_cache_free(evdi_kreq_cache, kreq);
@@ -572,38 +571,46 @@ int evdi_create_buff_callback_ioctl(struct drm_device *drm_dev, void *data,
 {
 	struct evdi_device *evdi = drm_dev->dev_private;
 	struct drm_evdi_create_buff_callabck *cmd = data;
-	struct drm_evdi_create_buff_callabck *buf = kmemdup(data, sizeof(*buf), GFP_KERNEL);
 	struct evdi_event *event;
 	struct evdi_kreq *kreq;
-	if (!buf)
-		return -ENOMEM;
 
 	event = evdi_find_event(evdi, cmd->poll_id);
 
-	if (!event) {
-		kfree(buf);
+	if (unlikely(!event))
 		return -EINVAL;
-	}
 
 	kreq = (struct evdi_kreq *)event->reply_data;
-	if (!kreq) {
-		kfree(buf);
+	if (unlikely(!kreq)) {
 		evdi_event_unlink_and_free(evdi, event);
 		return 0;
 	}
 
+	kreq->reply_inline_id = cmd->id;
+	kreq->reply_inline_stride = cmd->stride;
+	kreq->reply = NULL;
 	kreq->result = 0;
-	kreq->reply = buf;
 	complete(&kreq->done);
-	if (atomic_read(&kreq->waiter_gone)) {
-		kfree(buf);
-		kreq->reply = NULL;
-	}
 	if (refcount_dec_and_test(&kreq->refs))
 		kmem_cache_free(evdi_kreq_cache, kreq);
 
 	evdi_event_unlink_and_free(evdi, event);
 	return 0;
+}
+
+static void evdi_free_add_gralloc_buf(struct evdi_gralloc_buf *buf)
+{
+	int i;
+	if (!buf)
+		return;
+
+	for (i = 0; i < buf->numFds; i++)
+		if (buf->data_files[i])
+			fput(buf->data_files[i]);
+
+	if (buf->memfd_file)
+		fput(buf->memfd_file);
+
+	kfree(buf);
 }
 
 int evdi_gbm_add_buf_ioctl(struct drm_device *dev, void *data,
@@ -715,12 +722,15 @@ int evdi_gbm_add_buf_ioctl(struct drm_device *dev, void *data,
 	kreq->reply = NULL;
 	event->reply_data = kreq;
 
-	wake_up_interruptible(&evdi->poll_ioct_wq);
+	if (waitqueue_active(&evdi->poll_ioct_wq))
+		wake_up_interruptible(&evdi->poll_ioct_wq);
 
 	ret = wait_for_completion_interruptible_timeout(&kreq->done, EVDI_WAIT_TIMEOUT);
 	if (ret <= 0) {
 		EVDI_ERROR("evdi_gbm_add_buf_ioctl: wait failed: %d\n", ret);
 		atomic_set(&kreq->waiter_gone, 1);
+		evdi_free_add_gralloc_buf(add_gralloc_buf);
+		evdi_event_unlink_and_free(evdi, event);
 		if (refcount_dec_and_test(&kreq->refs)) {
 			kmem_cache_free(evdi_kreq_cache, kreq);
 		}
@@ -728,15 +738,15 @@ int evdi_gbm_add_buf_ioctl(struct drm_device *dev, void *data,
 	}
 	if (kreq->result < 0) {
 		int err = kreq->result;
+		evdi_free_add_gralloc_buf(add_gralloc_buf);
+		evdi_event_unlink_and_free(evdi, event);
 		if (refcount_dec_and_test(&kreq->refs)) {
 			kmem_cache_free(evdi_kreq_cache, kreq);
 		}
 		return err;
 	}
-	if (kreq->reply) {
-		cmd->id = *((int *)kreq->reply);
-		kfree(kreq->reply);
-	}
+	cmd->id = READ_ONCE(kreq->reply_inline_id);
+
 	if (refcount_dec_and_test(&kreq->refs))
 		kmem_cache_free(evdi_kreq_cache, kreq);
 
@@ -757,11 +767,11 @@ int evdi_gbm_get_buf_ioctl(struct drm_device *dev, void *data,
 	int installed_fds[EVDI_MAX_FDS];
 
 	event = evdi_create_event(evdi, get_buf, &cmd->id, file);
-	if (!event)
+	if (unlikely(!event))
 		return -ENOMEM;
 
 	kreq = kmem_cache_zalloc(evdi_kreq_cache, GFP_KERNEL);
-	if (!kreq)
+	if (unlikely(!kreq))
 		return -ENOMEM;
 
 	init_completion(&kreq->done);
@@ -772,10 +782,11 @@ int evdi_gbm_get_buf_ioctl(struct drm_device *dev, void *data,
 	kreq->reply = NULL;
 	event->reply_data = kreq;
 
-	wake_up_interruptible(&evdi->poll_ioct_wq);
+	if (waitqueue_active(&evdi->poll_ioct_wq))
+		wake_up_interruptible(&evdi->poll_ioct_wq);
 
 	ret = wait_for_completion_interruptible_timeout(&kreq->done, EVDI_WAIT_TIMEOUT);
-	if (ret <= 0) {
+	if (unlikely(ret <= 0)) {
 		EVDI_ERROR("evdi_gbm_get_buf_ioctl: wait failed: %d\n", ret);
 		kfree(gralloc_buf);
 		atomic_set(&kreq->waiter_gone, 1);
@@ -784,7 +795,7 @@ int evdi_gbm_get_buf_ioctl(struct drm_device *dev, void *data,
 		}
 		return ret ? ret : -ETIMEDOUT;
 	}
-	if (kreq->result < 0) {
+	if (unlikely(kreq->result < 0)) {
 		ret = kreq->result;
 		kfree(gralloc_buf);
 		if (refcount_dec_and_test(&kreq->refs)) {
@@ -868,11 +879,11 @@ int evdi_gbm_del_buf_ioctl(struct drm_device *dev, void *data,
 	int ret;
 
 	event = evdi_create_event(evdi, destroy_buf, &cmd->id, file);
-	if (!event)
+	if (unlikely(!event))
 		return -ENOMEM;
 
 	kreq = kmem_cache_zalloc(evdi_kreq_cache, GFP_KERNEL);
-	if (!kreq)
+	if (unlikely(!kreq))
 		return -ENOMEM;
 
 	init_completion(&kreq->done);
@@ -883,7 +894,9 @@ int evdi_gbm_del_buf_ioctl(struct drm_device *dev, void *data,
 	kreq->reply = NULL;
 	event->reply_data = kreq;
 
-	wake_up_interruptible(&evdi->poll_ioct_wq);
+	if (waitqueue_active(&evdi->poll_ioct_wq))
+		wake_up_interruptible(&evdi->poll_ioct_wq);
+
 	ret = wait_for_completion_interruptible_timeout(&kreq->done, EVDI_WAIT_TIMEOUT);
 	if (ret == 0) {
 		EVDI_ERROR("evdi_gbm_del_buf_ioctl: wait timed out\n");
@@ -914,17 +927,16 @@ int evdi_gbm_del_buf_ioctl(struct drm_device *dev, void *data,
 int evdi_gbm_create_buff (struct drm_device *dev, void *data,
 					struct drm_file *file)
 {
-	int ret;
+	int ret, id_inline, stride_inline;
 	struct drm_evdi_gbm_create_buff *cmd = data;
 	struct evdi_device *evdi = dev->dev_private;
-	struct drm_evdi_create_buff_callabck *cb_cmd;
 	struct evdi_event *event = evdi_create_event(evdi, create_buf, cmd, file);
 	struct evdi_kreq *kreq;
-	if (!event)
+	if (unlikely(!event))
 		return -ENOMEM;
 
 	kreq = kmem_cache_zalloc(evdi_kreq_cache, GFP_KERNEL);
-	if (!kreq)
+	if (unlikely(!kreq))
 		return -ENOMEM;
 
 	init_completion(&kreq->done);
@@ -935,7 +947,8 @@ int evdi_gbm_create_buff (struct drm_device *dev, void *data,
 	kreq->reply = NULL;
 	event->reply_data = kreq;
 
-	wake_up_interruptible(&evdi->poll_ioct_wq);
+	if (waitqueue_active(&evdi->poll_ioct_wq))
+		wake_up_interruptible(&evdi->poll_ioct_wq);
 
 	ret = wait_for_completion_interruptible_timeout(&kreq->done, EVDI_WAIT_TIMEOUT);
 	if (ret <= 0) {
@@ -953,23 +966,19 @@ int evdi_gbm_create_buff (struct drm_device *dev, void *data,
 		}
 		return ret;
 	}
-	cb_cmd = (struct drm_evdi_create_buff_callabck *)kreq->reply;
-	if (evdi_copy_to_user_allow_partial((void __user *)cmd->id, &cb_cmd->id, sizeof(int)) ||
-	    evdi_copy_to_user_allow_partial((void __user *)cmd->stride, &cb_cmd->stride, sizeof(int))) {
+	id_inline     = READ_ONCE(kreq->reply_inline_id);
+	stride_inline = READ_ONCE(kreq->reply_inline_stride);
+	if (evdi_copy_to_user_allow_partial((void __user *)cmd->id, &id_inline, sizeof(int)) ||
+	    evdi_copy_to_user_allow_partial((void __user *)cmd->stride, &stride_inline, sizeof(int))) {
 		ret = -EFAULT;
 		goto err_event;
 	}
-
-	kfree(cb_cmd);
 	if (refcount_dec_and_test(&kreq->refs))
 		kmem_cache_free(evdi_kreq_cache, kreq);
 
 	return 0;
 
 err_event:
-	if (cb_cmd) {
-		kfree(cb_cmd);
-	}
 	atomic_set(&kreq->waiter_gone, 1);
 	if (refcount_dec_and_test(&kreq->refs)) {
 		kmem_cache_free(evdi_kreq_cache, kreq);
@@ -1131,9 +1140,12 @@ static void evdi_cancel_events_for_file(struct evdi_device *evdi,
 			if (refcount_dec_and_test(&kreq->refs))
 				kmem_cache_free(evdi_kreq_cache, kreq);
 		}
+#if defined(EVDI_HAVE_XARRAY)
+		kfree_rcu(event, rcu);
+#else
 		evdi_event_free(event);
+#endif
 	}
-
 	spin_unlock(&evdi->event_lock);
 }
 
@@ -1142,7 +1154,6 @@ static void evdi_drm_device_release_cb(__always_unused struct drm_device *dev,
 {
 	struct evdi_device *evdi = dev->dev_private;
 
-	evdi_cursor_free(evdi->cursor);
 	evdi_painter_cleanup(evdi->painter);
 	kfree(evdi);
 	dev->dev_private = NULL;
@@ -1164,7 +1175,6 @@ static int evdi_drm_device_init(struct drm_device *dev)
 
 	evdi->ddev = dev;
 	evdi->dev_index = dev->primary->index;
-	evdi->cursor_events_enabled = false;
 	dev->dev_private = evdi;
 	evdi->poll_event = none;
 	init_waitqueue_head(&evdi->poll_ioct_wq);
@@ -1190,9 +1200,6 @@ static int evdi_drm_device_init(struct drm_device *dev)
 	ret = evdi_painter_init(evdi);
 	if (ret)
 		goto err_free;
-	ret =  evdi_cursor_init(&evdi->cursor);
-	if (ret)
-		goto err_free;
 
 	evdi_modeset_init(dev);
 
@@ -1212,7 +1219,6 @@ static int evdi_drm_device_init(struct drm_device *dev)
 err_init:
 err_free:
 	EVDI_ERROR("Failed to setup drm device %d\n", ret);
-	evdi_cursor_free(evdi->cursor);
 	kfree(evdi->painter);
 	kfree(evdi);
 	dev->dev_private = NULL;
