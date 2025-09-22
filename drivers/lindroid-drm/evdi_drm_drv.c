@@ -610,6 +610,22 @@ int evdi_create_buff_callback_ioctl(struct drm_device *drm_dev, void *data,
 	return 0;
 }
 
+static void evdi_free_add_gralloc_buf(struct evdi_gralloc_buf *buf)
+{
+	int i;
+	if (!buf)
+		return;
+
+	for (i = 0; i < buf->numFds; i++)
+		if (buf->data_files[i])
+			fput(buf->data_files[i]);
+
+	if (buf->memfd_file)
+		fput(buf->memfd_file);
+
+	kfree(buf);
+}
+
 int evdi_gbm_add_buf_ioctl(struct drm_device *dev, void *data,
 					struct drm_file *file)
 {
@@ -726,6 +742,8 @@ int evdi_gbm_add_buf_ioctl(struct drm_device *dev, void *data,
 	if (ret <= 0) {
 		EVDI_ERROR("evdi_gbm_add_buf_ioctl: wait failed: %d\n", ret);
 		atomic_set(&kreq->waiter_gone, 1);
+		evdi_free_add_gralloc_buf(add_gralloc_buf);
+		evdi_event_unlink_and_free(evdi, event);
 		if (refcount_dec_and_test(&kreq->refs)) {
 			kmem_cache_free(evdi_kreq_cache, kreq);
 		}
@@ -733,6 +751,8 @@ int evdi_gbm_add_buf_ioctl(struct drm_device *dev, void *data,
 	}
 	if (kreq->result < 0) {
 		int err = kreq->result;
+		evdi_free_add_gralloc_buf(add_gralloc_buf);
+		evdi_event_unlink_and_free(evdi, event);
 		if (refcount_dec_and_test(&kreq->refs)) {
 			kmem_cache_free(evdi_kreq_cache, kreq);
 		}
