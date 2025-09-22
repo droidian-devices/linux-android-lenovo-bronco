@@ -601,7 +601,7 @@ evdi_painter_connect(struct evdi_device *evdi,
 
 	EVDI_INFO("(card%d) Connected with %s\n", evdi->dev_index, buf);
 
-	drm_helper_hpd_irq_event(evdi->ddev);
+	drm_kms_helper_hotplug_event(evdi->ddev);
 
 	return 0;
 }
