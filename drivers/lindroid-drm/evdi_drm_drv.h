@@ -49,6 +49,8 @@
 #include "tests/evdi_test.h"
 
 #define EVDI_WAIT_TIMEOUT (10*HZ)
+#define EVDI_MAX_FDS   32
+#define EVDI_MAX_INTS  256
 
 struct evdi_fbdev;
 struct evdi_painter;
@@ -153,8 +155,8 @@ struct evdi_gralloc_buf {
 	int version;
 	int numFds;
 	int numInts;
-	struct file **data_files;
-	int *data_ints;
+	struct file *data_files[EVDI_MAX_FDS];
+	int data_ints[EVDI_MAX_INTS];
 	struct file *memfd_file;
 };
 

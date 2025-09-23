@@ -135,11 +135,18 @@ struct evdi_kreq {
 	void			*reply;
 	int			reply_inline_id;
 	int			reply_inline_stride;
+	struct {
+		int version;
+		int numFds;
+		int numInts;
+		struct file *files[EVDI_MAX_FDS];
+		int ints[EVDI_MAX_INTS];
+		bool valid;
+	} inline_gralloc;
 };
 static struct kmem_cache *evdi_kreq_cache;
 
-#define EVDI_MAX_FDS   32
-#define EVDI_MAX_INTS  256
+static struct kmem_cache *evdi_gralloc_cache;
 
 //Handle short copies due to minor faults on big buffers
 static inline int evdi_prefault_readable(const void __user *uaddr, size_t len)
@@ -339,6 +346,19 @@ static int evdi_event_cache_get(void)
 			return -ENOMEM;
 		}
 	}
+	if (!evdi_gralloc_cache) {
+		evdi_gralloc_cache = kmem_cache_create("evdi_gralloc_buf",
+				sizeof(struct evdi_gralloc_buf), 0,
+				SLAB_HWCACHE_ALIGN, NULL);
+		if (!evdi_gralloc_cache) {
+			kmem_cache_destroy(evdi_event_cache);
+			evdi_event_cache = NULL;
+			kmem_cache_destroy(evdi_kreq_cache);
+			evdi_kreq_cache = NULL;
+			atomic_dec(&evdi_event_cache_users);
+			return -ENOMEM;
+		}
+	}
 	return 0;
 }
 
@@ -350,6 +370,10 @@ static void evdi_event_cache_put(void)
 		if (evdi_kreq_cache) {
 			kmem_cache_destroy(evdi_kreq_cache);
 			evdi_kreq_cache = NULL;
+		}
+		if (evdi_gralloc_cache) {
+			kmem_cache_destroy(evdi_gralloc_cache);
+			evdi_gralloc_cache = NULL;
 		}
 	}
 }
@@ -454,12 +478,10 @@ int evdi_get_buff_callback_ioctl(struct drm_device *drm_dev, void *data,
 	struct evdi_device *evdi = drm_dev->dev_private;
 	struct drm_evdi_get_buff_callabck *cmd = data;
 	struct evdi_event *event = evdi_find_event(evdi, cmd->poll_id);
-	struct evdi_gralloc_buf *gralloc_buf;
 	struct evdi_kreq *kreq;
 	int i;
 	int fd_ints[EVDI_MAX_FDS];
-	size_t ints_sz, files_sz;
-	void *mem;
+	int ints_tmp[EVDI_MAX_INTS];
 
 	if (unlikely(!event))
 		return -EINVAL;
@@ -468,66 +490,64 @@ int evdi_get_buff_callback_ioctl(struct drm_device *drm_dev, void *data,
 	    cmd->numFds > EVDI_MAX_FDS || cmd->numInts > EVDI_MAX_INTS)
 		return -EINVAL;
 
-	ints_sz = sizeof(int) * cmd->numInts;
-	files_sz = sizeof(struct file *) * cmd->numFds;
-	mem = kzalloc(sizeof(struct evdi_gralloc_buf) + ints_sz + files_sz, GFP_KERNEL);
-	if (!mem)
-		return -ENOMEM;
-
-	gralloc_buf = mem;
-	gralloc_buf->version = cmd->version;
-	gralloc_buf->numFds = cmd->numFds;
-	gralloc_buf->numInts = cmd->numInts;
-	gralloc_buf->data_ints = (int *)((char *)mem + sizeof(struct evdi_gralloc_buf));
-	gralloc_buf->data_files = (struct file **)((char *)gralloc_buf->data_ints + ints_sz);
-
 	if (cmd->numInts &&
-	    evdi_copy_from_user_allow_partial(gralloc_buf->data_ints,
-					      (const void __user *)cmd->data_ints,
-					      sizeof(int) * cmd->numInts)) {
-		kfree(gralloc_buf);
+	    evdi_copy_from_user_allow_partial(ints_tmp,
+		(const void __user *)cmd->data_ints,
+		sizeof(int) * cmd->numInts)) {
 		return -EFAULT;
 	}
 	if (evdi_copy_from_user_allow_partial(fd_ints,
-					      (const void __user *)cmd->fd_ints,
-					      sizeof(int) * cmd->numFds)) {
-		kfree(gralloc_buf);
+		(const void __user *)cmd->fd_ints,
+		sizeof(int) * cmd->numFds)) {
 		return -EFAULT;
-	}
-	
-	for (i = 0; i < cmd->numFds; i++) {
-		gralloc_buf->data_files[i] = fget(fd_ints[i]);
-		if (!gralloc_buf->data_files[i]) {
-			EVDI_ERROR("evdi_get_buff_callback_ioctl: Failed to open fake fb %d\n", fd_ints[i]);
-			while (--i >= 0) {
-				if (gralloc_buf->data_files[i])
-					fput(gralloc_buf->data_files[i]);
-			}
-			kfree(gralloc_buf);
-			return -EINVAL;
-		}
 	}
 
 	kreq = (struct evdi_kreq *)event->reply_data;
 	if (!kreq) {
-		for (i = 0; i < gralloc_buf->numFds; i++) {
-			if (gralloc_buf->data_files[i])
-				fput(gralloc_buf->data_files[i]);
-		}
-		kfree(gralloc_buf);
 		evdi_event_unlink_and_free(evdi, event);
 		return 0;
 	}
 
-	kreq->reply = gralloc_buf;
+	kreq->inline_gralloc.version = cmd->version;
+	kreq->inline_gralloc.numFds = cmd->numFds;
+	kreq->inline_gralloc.numInts = cmd->numInts;
+	kreq->inline_gralloc.valid = false;
+
+	for (i = 0; i < cmd->numInts; i++)
+		kreq->inline_gralloc.ints[i] = ints_tmp[i];
+
+	for (i = 0; i < cmd->numFds; i++) {
+		kreq->inline_gralloc.files[i] = fget(fd_ints[i]);
+		if (!kreq->inline_gralloc.files[i]) {
+			EVDI_ERROR("evdi_get_buff_callback_ioctl: Failed to open fake fb %d\n", fd_ints[i]);
+			while (--i >= 0) {
+				if (kreq->inline_gralloc.files[i])
+					fput(kreq->inline_gralloc.files[i]);
+				kreq->inline_gralloc.files[i] = NULL;
+			}
+			kreq->result = -EINVAL;
+			smp_wmb();
+			complete(&kreq->done);
+			if (refcount_dec_and_test(&kreq->refs))
+				kmem_cache_free(evdi_kreq_cache, kreq);
+			evdi_event_unlink_and_free(evdi, event);
+			return 0;
+		}
+	}
+
+	kreq->inline_gralloc.valid = true;
+	kreq->reply = NULL;
 	kreq->result = 0;
 	smp_wmb();
 	complete(&kreq->done);
 	if (atomic_read(&kreq->waiter_gone)) {
-		for (i = 0; i < gralloc_buf->numFds; i++)
-			if (gralloc_buf->data_files[i]) fput(gralloc_buf->data_files[i]);
-		kfree(gralloc_buf);
-		kreq->reply = NULL;
+		for (i = 0; i < kreq->inline_gralloc.numFds; i++) {
+			if (kreq->inline_gralloc.files[i]) {
+				fput(kreq->inline_gralloc.files[i]);
+				kreq->inline_gralloc.files[i] = NULL;
+			}
+		}
+		kreq->inline_gralloc.valid = false;
 	}
 	if (refcount_dec_and_test(&kreq->refs))
 		kmem_cache_free(evdi_kreq_cache, kreq);
@@ -610,7 +630,7 @@ static void evdi_free_add_gralloc_buf(struct evdi_gralloc_buf *buf)
 	if (buf->memfd_file)
 		fput(buf->memfd_file);
 
-	kfree(buf);
+	kmem_cache_free(evdi_gralloc_cache, buf);
 }
 
 int evdi_gbm_add_buf_ioctl(struct drm_device *dev, void *data,
@@ -618,7 +638,7 @@ int evdi_gbm_add_buf_ioctl(struct drm_device *dev, void *data,
 {
 	struct file *memfd_file;
 	struct file *fd_file;
-	int version, numFds, numInts, fd;
+	int version, numFds, numInts, fd, i, ret;
 	ssize_t bytes_read;
 	struct evdi_gralloc_buf *add_gralloc_buf;
 	struct evdi_device *evdi = dev->dev_private;
@@ -626,10 +646,8 @@ int evdi_gbm_add_buf_ioctl(struct drm_device *dev, void *data,
 	struct evdi_event *event;
 	struct evdi_kreq *kreq;
 	loff_t pos;
-	int i, ret;
 	int fd_array[EVDI_MAX_FDS];
-	size_t ints_sz, files_sz;
-	void *mem;
+	size_t ints_read_sz = 0;
 	struct {
 		int version;
 		int numFds;
@@ -659,25 +677,21 @@ int evdi_gbm_add_buf_ioctl(struct drm_device *dev, void *data,
 		fput(memfd_file);
 		return -EINVAL;
 	}
-	ints_sz = sizeof(int) * numInts;
-	files_sz = sizeof(struct file *) * numFds;
-	mem = kzalloc(sizeof(struct evdi_gralloc_buf) + ints_sz + files_sz, GFP_KERNEL);
-	if (!mem) {
+	add_gralloc_buf = kmem_cache_zalloc(evdi_gralloc_cache, GFP_KERNEL);
+	if (!add_gralloc_buf) {
 		fput(memfd_file);
 		return -ENOMEM;
 	}
-	add_gralloc_buf = mem;
 	add_gralloc_buf->numFds = numFds;
 	add_gralloc_buf->numInts = numInts;
-	add_gralloc_buf->data_ints = (int *)((char *)mem + sizeof(struct evdi_gralloc_buf));
-	add_gralloc_buf->data_files = (struct file **)((char *)add_gralloc_buf->data_ints + ints_sz);
 	add_gralloc_buf->memfd_file = memfd_file;
+	add_gralloc_buf->version = version;
 
 	if (numFds) {
 		bytes_read = kernel_read(memfd_file, fd_array, sizeof(int) * numFds, &pos);
 		if (bytes_read != sizeof(int) * numFds) {
 			EVDI_ERROR("Failed to read fd array from memfd, bytes_read=%zd\n", bytes_read);
-			kfree(add_gralloc_buf);
+			kmem_cache_free(evdi_gralloc_cache, add_gralloc_buf);
 			fput(memfd_file);
 			return -EIO;
 		}
@@ -686,7 +700,7 @@ int evdi_gbm_add_buf_ioctl(struct drm_device *dev, void *data,
 			fd_file = fget(fd);
 			if (!fd_file) {
 				EVDI_ERROR("Failed to open fake fb's %d fd file: %d\n", cmd->fd, fd);
-				kfree(add_gralloc_buf);
+				kmem_cache_free(evdi_gralloc_cache, add_gralloc_buf);
 				fput(memfd_file);
 				return -EINVAL;
 			}
@@ -694,14 +708,14 @@ int evdi_gbm_add_buf_ioctl(struct drm_device *dev, void *data,
 		}
 	}
 
-	bytes_read = kernel_read(memfd_file, add_gralloc_buf->data_ints, sizeof(int) *numInts, &pos);
-	if (bytes_read != sizeof(int) *numInts) {
+	bytes_read = kernel_read(memfd_file, add_gralloc_buf->data_ints, ints_read_sz, &pos);
+	if (bytes_read != ints_read_sz) {
 		EVDI_ERROR("Failed to read ints from memfd, bytes_read=%zd\n", bytes_read);
 		for (i = 0; i < numFds; i++) {
 			if (add_gralloc_buf->data_files[i])
 				fput(add_gralloc_buf->data_files[i]);
 		}
-		kfree(add_gralloc_buf);
+		kmem_cache_free(evdi_gralloc_cache, add_gralloc_buf);
 		fput(memfd_file);
 		return -EIO;
 	}
@@ -758,12 +772,11 @@ int evdi_gbm_get_buf_ioctl(struct drm_device *dev, void *data,
 {
 	struct drm_evdi_gbm_get_buff *cmd = data;
 	struct evdi_gralloc_buf_user *gralloc_buf = kzalloc(sizeof(struct evdi_gralloc_buf_user), GFP_KERNEL);
-	struct evdi_gralloc_buf *gralloc_buf_tmp = NULL;
 	struct evdi_device *evdi = dev->dev_private;
 	int fd_tmp, ret;
 	struct evdi_event *event;
 	struct evdi_kreq *kreq;
-	int i;
+	int i, numFds, numInts;
 	int installed_fds[EVDI_MAX_FDS];
 
 	event = evdi_create_event(evdi, get_buf, &cmd->id, file);
@@ -795,8 +808,8 @@ int evdi_gbm_get_buf_ioctl(struct drm_device *dev, void *data,
 		}
 		return ret ? ret : -ETIMEDOUT;
 	}
-	if (unlikely(kreq->result < 0)) {
-		ret = kreq->result;
+	if (unlikely(kreq->result < 0 || !kreq->inline_gralloc.valid)) {
+		ret = kreq->result ? kreq->result : -EINVAL;
 		kfree(gralloc_buf);
 		if (refcount_dec_and_test(&kreq->refs)) {
 			kmem_cache_free(evdi_kreq_cache, kreq);
@@ -804,20 +817,20 @@ int evdi_gbm_get_buf_ioctl(struct drm_device *dev, void *data,
 		return ret;
 	}
 
-	gralloc_buf_tmp = (struct evdi_gralloc_buf *)kreq->reply;
-	if (!gralloc_buf || !gralloc_buf_tmp) {
-		ret = -ENOMEM;
-		goto err_event;
-	}
-	if (gralloc_buf_tmp->numFds < 0 || gralloc_buf_tmp->numFds > EVDI_MAX_FDS ||
-		gralloc_buf_tmp->numInts < 0 || gralloc_buf_tmp->numInts > EVDI_MAX_INTS) {
+	numFds = kreq->inline_gralloc.numFds;
+	numInts = kreq->inline_gralloc.numInts;
+	if (numFds < 0 || numFds > EVDI_MAX_FDS ||
+	    numInts < 0 || numInts > EVDI_MAX_INTS) {
 		ret = -EINVAL;
 		goto err_event;
 	}
-	gralloc_buf->version = gralloc_buf_tmp->version;
-	gralloc_buf->numFds = gralloc_buf_tmp->numFds;
-	gralloc_buf->numInts = gralloc_buf_tmp->numInts;
-	memcpy(&gralloc_buf->data[gralloc_buf->numFds], gralloc_buf_tmp->data_ints, sizeof(int)*gralloc_buf->numInts);
+
+	gralloc_buf->version = kreq->inline_gralloc.version;
+	gralloc_buf->numFds = numFds;
+	gralloc_buf->numInts = numInts;
+	memcpy(&gralloc_buf->data[gralloc_buf->numFds],
+	       kreq->inline_gralloc.ints,
+	       sizeof(int) * gralloc_buf->numInts);
 
 	for (i = 0; i < gralloc_buf->numFds; i++) {
 		fd_tmp = get_unused_fd_flags(O_RDWR);
@@ -832,8 +845,8 @@ int evdi_gbm_get_buf_ioctl(struct drm_device *dev, void *data,
 	}
 
 	if (evdi_copy_to_user_allow_partial((void __user *)cmd->native_handle,
-					    gralloc_buf,
-					    sizeof(int) * (3 + gralloc_buf->numFds + gralloc_buf->numInts))) {
+	    gralloc_buf,
+	    sizeof(int) * (3 + gralloc_buf->numFds + gralloc_buf->numInts))) {
 		EVDI_ERROR("Failed to copy file descriptor to userspace\n");
 		for (i = 0; i < gralloc_buf->numFds; i++)
 			put_unused_fd(installed_fds[i]);
@@ -842,26 +855,22 @@ int evdi_gbm_get_buf_ioctl(struct drm_device *dev, void *data,
 	}
 
 	for (i = 0; i < gralloc_buf->numFds; i++)
-		fd_install(installed_fds[i], gralloc_buf_tmp->data_files[i]);
+		fd_install(installed_fds[i], kreq->inline_gralloc.files[i]);
 
 	kfree(gralloc_buf);
-	if (gralloc_buf_tmp)
-		kfree(gralloc_buf_tmp);
-
 	if (refcount_dec_and_test(&kreq->refs))
 		kmem_cache_free(evdi_kreq_cache, kreq);
-
 	return 0;
 
 err_event:
 	kfree(gralloc_buf);
-	if (gralloc_buf_tmp) {
-		for (i = 0; i < gralloc_buf_tmp->numFds; i++)
-			if (gralloc_buf_tmp->data_files[i])
-				fput(gralloc_buf_tmp->data_files[i]);
-
-		kfree(gralloc_buf_tmp);
-	};
+	for (i = 0; i < numFds; i++) {
+		if (kreq->inline_gralloc.files[i]) {
+			fput(kreq->inline_gralloc.files[i]);
+			kreq->inline_gralloc.files[i] = NULL;
+		}
+	}
+	kreq->inline_gralloc.valid = false;
 	atomic_set(&kreq->waiter_gone, 1);
 	if (refcount_dec_and_test(&kreq->refs)) {
 		kmem_cache_free(evdi_kreq_cache, kreq);
@@ -1073,7 +1082,7 @@ int evdi_poll_ioctl(struct drm_device *drm_dev, void *data,
 				for (i = 0; i < add_gralloc_buf->numFds; i++)
 					put_unused_fd(reserved_fd_tmps[i]);
 				put_unused_fd(fd);
-				kfree(add_gralloc_buf);
+				kmem_cache_free(evdi_gralloc_cache, add_gralloc_buf);
 				return -EFAULT;
 			}
 
@@ -1083,14 +1092,14 @@ int evdi_poll_ioctl(struct drm_device *drm_dev, void *data,
 					put_unused_fd(reserved_fd_tmps[i]);
 
 				put_unused_fd(fd);
-				kfree(add_gralloc_buf);
+				kmem_cache_free(evdi_gralloc_cache, add_gralloc_buf);
 				return -EFAULT;
 			}
 			fd_install(fd, add_gralloc_buf->memfd_file);
 			for (i = 0; i < add_gralloc_buf->numFds; i++)
 				fd_install(reserved_fd_tmps[i], add_gralloc_buf->data_files[i]);
 
-			kfree(add_gralloc_buf);
+			kmem_cache_free(evdi_gralloc_cache, add_gralloc_buf);
 			break;
 			}
 		case create_buf:
