@@ -109,6 +109,7 @@ struct evdi_gem_object {
 #if KERNEL_VERSION(5, 11, 0) <= LINUX_VERSION_CODE || defined(EL8)
 	bool vmap_is_iomem;
 #endif
+	bool vmap_is_vmram;
 	struct sg_table *sg;
 };
 

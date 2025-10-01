@@ -347,9 +347,18 @@ int evdi_gem_vmap(struct evdi_gem_object *obj)
 	if (ret)
 		return ret;
 
-	obj->vmapping = vmap(obj->pages, page_count, 0, PAGE_KERNEL);
+#if KERNEL_VERSION(5, 9, 0) < LINUX_VERSION_CODE
+	obj->vmapping = vm_map_ram(obj->pages, page_count, -1);
+#else
+	obj->vmapping = vm_map_ram(obj->pages, page_count, -1, PAGE_KERNEL);
+#endif
+	obj->vmap_is_vmram = obj->vmapping != NULL;
+	if (!obj->vmapping)
+		obj->vmapping = vmap(obj->pages, page_count, 0, PAGE_KERNEL);
+
 	if (!obj->vmapping)
 		return -ENOMEM;
+
 	return 0;
 }
 
@@ -383,8 +392,13 @@ void evdi_gem_vunmap(struct evdi_gem_object *obj)
 	}
 
 	if (obj->vmapping) {
-		vunmap(obj->vmapping);
+		if (obj->vmap_is_vmram) {
+			vm_unmap_ram(obj->vmapping, DIV_ROUND_UP(obj->base.size, PAGE_SIZE));
+		} else {
+			vunmap(obj->vmapping);
+		}
 		obj->vmapping = NULL;
+		obj->vmap_is_vmram = false;
 	}
 
 	evdi_unpin_pages(obj);
