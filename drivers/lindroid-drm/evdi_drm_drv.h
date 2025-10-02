@@ -103,12 +103,13 @@ struct evdi_event {
 struct evdi_gem_object {
 	struct drm_gem_object base;
 	struct page **pages;
-	unsigned int pages_pin_count;
+	atomic_t pages_pin_count;
 	struct mutex pages_lock;
 	void *vmapping;
 #if KERNEL_VERSION(5, 11, 0) <= LINUX_VERSION_CODE || defined(EL8)
 	bool vmap_is_iomem;
 #endif
+	bool vmap_is_vmram;
 	struct sg_table *sg;
 };
 

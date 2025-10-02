@@ -32,41 +32,55 @@
 MODULE_IMPORT_NS("DMA_BUF");
 #endif
 
+static int evdi_pin_pages(struct evdi_gem_object *obj);
+static void evdi_unpin_pages(struct evdi_gem_object *obj);
+static void evdi_gem_vm_open(struct vm_area_struct *vma)
+{
+	struct evdi_gem_object *obj = to_evdi_bo(vma->vm_private_data);
+	drm_gem_vm_open(vma);
+	evdi_pin_pages(obj);
+}
+
+static void evdi_gem_vm_close(struct vm_area_struct *vma)
+{
+	struct evdi_gem_object *obj = to_evdi_bo(vma->vm_private_data);
+	evdi_unpin_pages(obj);
+	drm_gem_vm_close(vma);
+}
+
+static const struct vm_operations_struct evdi_gem_vm_ops = {
+	.fault	= evdi_gem_fault,
+	.open	= evdi_gem_vm_open,
+	.close	= evdi_gem_vm_close,
+};
+
 #if KERNEL_VERSION(5, 11, 0) <= LINUX_VERSION_CODE || defined(EL8)
 static int evdi_prime_pin(struct drm_gem_object *obj);
 static void evdi_prime_unpin(struct drm_gem_object *obj);
 
-static const struct vm_operations_struct evdi_gem_vm_ops = {
-	.fault = evdi_gem_fault,
-	.open = drm_gem_vm_open,
-	.close = drm_gem_vm_close,
-};
-
 static struct drm_gem_object_funcs gem_obj_funcs = {
-	.free = evdi_gem_free_object,
-	.pin = evdi_prime_pin,
-	.unpin = evdi_prime_unpin,
-	.vm_ops = &evdi_gem_vm_ops,
-	.export = drm_gem_prime_export,
-	.get_sg_table = evdi_prime_get_sg_table,
+	.free		= evdi_gem_free_object,
+	.pin		= evdi_prime_pin,
+	.unpin		= evdi_prime_unpin,
+	.vm_ops		= &evdi_gem_vm_ops,
+	.export		= drm_gem_prime_export,
+	.get_sg_table	= evdi_prime_get_sg_table,
 };
 #endif
 
-static bool evdi_was_called_by_mutter(void)
-{
-	char task_comm[TASK_COMM_LEN] = { 0 };
-
-	get_task_comm(task_comm, current);
-
-	return strcmp(task_comm, "gnome-shell") == 0;
-}
-
 static bool evdi_drm_gem_object_use_import_attach(struct drm_gem_object *obj)
 {
-	if (!obj || !obj->import_attach || !obj->import_attach->dmabuf->owner)
+	if (!obj || !obj->import_attach || !obj->import_attach->dmabuf)
 		return false;
 
-	return strcmp(obj->import_attach->dmabuf->owner->name, "amdgpu") != 0;
+#if defined(CONFIG_MODULES)
+	if (!obj->import_attach->dmabuf->owner)
+		return false;
+
+	return strcmp(module_name(obj->import_attach->dmabuf->owner), "amdgpu") != 0;
+#else
+	return true;
+#endif
 }
 
 uint32_t evdi_gem_object_handle_lookup(struct drm_file *filp,
@@ -101,7 +115,7 @@ struct evdi_gem_object *evdi_gem_alloc_object(struct drm_device *dev,
 		kfree(obj);
 		return NULL;
 	}
-
+	atomic_set(&obj->pages_pin_count, 0);
 
 #if KERNEL_VERSION(5, 11, 0) <= LINUX_VERSION_CODE || defined(EL8)
 	obj->base.funcs = &gem_obj_funcs;
@@ -185,10 +199,13 @@ int evdi_drm_gem_mmap(struct file *filp, struct vm_area_struct *vma)
 
 /* Some VMA modifier function patches present in 6.3 were reverted in EL kernels */
 #if KERNEL_VERSION(6, 1, 0) <= LINUX_VERSION_CODE
-	vm_flags_mod(vma, VM_MIXEDMAP, VM_PFNMAP);
+	vm_flags_mod(vma, VM_MIXEDMAP | VM_DONTDUMP | VM_DONTEXPAND | VM_DONTCOPY, VM_PFNMAP);
 #else
 	vma->vm_flags &= ~VM_PFNMAP;
-	vma->vm_flags |= VM_MIXEDMAP;
+	vma->vm_flags |= VM_MIXEDMAP | VM_DONTDUMP | VM_DONTEXPAND | VM_DONTCOPY;
+#endif
+#if KERNEL_VERSION(5, 11, 0) > LINUX_VERSION_CODE
+	vma->vm_ops = &evdi_gem_vm_ops;
 #endif
 
 	return ret;
@@ -215,7 +232,11 @@ int evdi_gem_fault(struct vm_fault *vmf)
 		return VM_FAULT_SIGBUS;
 
 	page = obj->pages[page_offset];
+#if KERNEL_VERSION(4, 17, 0) <= LINUX_VERSION_CODE
+	ret = vmf_insert_page(vma, vmf->address, page);
+#else
 	ret = vm_insert_page(vma, vmf->address, page);
+#endif
 	switch (ret) {
 	case -EAGAIN:
 	case 0:
@@ -260,7 +281,7 @@ static void evdi_gem_put_pages(struct evdi_gem_object *obj)
 		return;
 	}
 
-	drm_gem_put_pages(&obj->base, obj->pages, false, false);
+	drm_gem_put_pages(&obj->base, obj->pages, false, true);
 	obj->pages = NULL;
 }
 
@@ -268,11 +289,17 @@ static int evdi_pin_pages(struct evdi_gem_object *obj)
 {
 	int ret = 0;
 
+	// Fast path if pinned
+	if (likely(atomic_read(&obj->pages_pin_count) > 0)) {
+		atomic_inc(&obj->pages_pin_count);
+		return 0;
+	}
+	// Slow path
 	mutex_lock(&obj->pages_lock);
-	if (obj->pages_pin_count++ == 0) {
+	if (atomic_inc_return(&obj->pages_pin_count) == 1) {
 		ret = evdi_gem_get_pages(obj, GFP_KERNEL);
 		if (ret)
-			obj->pages_pin_count--;
+			atomic_dec(&obj->pages_pin_count);
 	}
 	mutex_unlock(&obj->pages_lock);
 	return ret;
@@ -280,10 +307,14 @@ static int evdi_pin_pages(struct evdi_gem_object *obj)
 
 static void evdi_unpin_pages(struct evdi_gem_object *obj)
 {
-	mutex_lock(&obj->pages_lock);
-	if (--obj->pages_pin_count == 0)
-		evdi_gem_put_pages(obj);
-	mutex_unlock(&obj->pages_lock);
+	int newcnt = atomic_dec_return(&obj->pages_pin_count);
+	if (unlikely(newcnt == 0)) {
+		mutex_lock(&obj->pages_lock);
+		if (atomic_read(&obj->pages_pin_count) == 0)
+			evdi_gem_put_pages(obj);
+
+		mutex_unlock(&obj->pages_lock);
+	}
 }
 
 int evdi_gem_vmap(struct evdi_gem_object *obj)
@@ -316,9 +347,18 @@ int evdi_gem_vmap(struct evdi_gem_object *obj)
 	if (ret)
 		return ret;
 
-	obj->vmapping = vmap(obj->pages, page_count, 0, PAGE_KERNEL);
+#if KERNEL_VERSION(5, 9, 0) < LINUX_VERSION_CODE
+	obj->vmapping = vm_map_ram(obj->pages, page_count, -1);
+#else
+	obj->vmapping = vm_map_ram(obj->pages, page_count, -1, PAGE_KERNEL);
+#endif
+	obj->vmap_is_vmram = obj->vmapping != NULL;
+	if (!obj->vmapping)
+		obj->vmapping = vmap(obj->pages, page_count, 0, PAGE_KERNEL);
+
 	if (!obj->vmapping)
 		return -ENOMEM;
+
 	return 0;
 }
 
@@ -352,8 +392,13 @@ void evdi_gem_vunmap(struct evdi_gem_object *obj)
 	}
 
 	if (obj->vmapping) {
-		vunmap(obj->vmapping);
+		if (obj->vmap_is_vmram) {
+			vm_unmap_ram(obj->vmapping, DIV_ROUND_UP(obj->base.size, PAGE_SIZE));
+		} else {
+			vunmap(obj->vmapping);
+		}
 		obj->vmapping = NULL;
+		obj->vmap_is_vmram = false;
 	}
 
 	evdi_unpin_pages(obj);
@@ -398,13 +443,11 @@ int evdi_gem_mmap(struct drm_file *file,
 	}
 	gobj = to_evdi_bo(obj);
 
-	ret = evdi_pin_pages(gobj);
-	if (ret)
-		goto out;
-
 	/* Don't allow imported objects to be mapped */
 	if (obj->import_attach) {
+#if defined(CONFIG_MODULES)
 		EVDI_WARN("Don't allow imported objects to be mapped: owner: %s",  obj->import_attach->dmabuf->owner->name);
+#endif
 		ret = -EINVAL;
 		goto out;
 	}
@@ -437,30 +480,14 @@ evdi_prime_import_sg_table(struct drm_device *dev,
 			   struct sg_table *sg)
 {
 	struct evdi_gem_object *obj;
-	int npages;
-	bool called_by_mutter;
 
 	EVDI_INFO("evdi_prime_import_sg_table");
 	print_dma_buf_owner(attach->dmabuf);
-	called_by_mutter = evdi_was_called_by_mutter();
 
 	obj = evdi_gem_alloc_object(dev, attach->dmabuf->size);
 	if (IS_ERR(obj))
 		return ERR_CAST(obj);
 
-	npages = DIV_ROUND_UP(attach->dmabuf->size, PAGE_SIZE);
-	DRM_DEBUG_PRIME("Importing %d pages\n", npages);
-	obj->pages = kvmalloc_array(npages, sizeof(struct page *), GFP_KERNEL);
-	if (!obj->pages) {
-		evdi_gem_free_object(&obj->base);
-		return ERR_PTR(-ENOMEM);
-	}
-
-#if KERNEL_VERSION(5, 12, 0) <= LINUX_VERSION_CODE || defined(EL8)
-	drm_prime_sg_to_page_array(sg, obj->pages, npages);
-#else
-	drm_prime_sg_to_page_addr_arrays(sg, obj->pages, NULL, npages);
-#endif
 	obj->sg = sg;
 	return &obj->base;
 }
@@ -481,9 +508,42 @@ static void evdi_prime_unpin(struct drm_gem_object *obj)
 }
 #endif
 
+static struct sg_table *evdi_dup_sg_table(const struct sg_table *src)
+{
+	struct sg_table *dst;
+	struct scatterlist *s, *d;
+	int i, nents;
+
+	if (!src || !src->sgl)
+		return ERR_PTR(-EINVAL);
+
+	dst = kzalloc(sizeof(*dst), GFP_KERNEL);
+	if (!dst)
+		return ERR_PTR(-ENOMEM);
+
+	nents = src->nents;
+	if (sg_alloc_table(dst, nents, GFP_KERNEL)) {
+		kfree(dst);
+		return ERR_PTR(-ENOMEM);
+	}
+
+	s = src->sgl;
+	d = dst->sgl;
+	for (i = 0; i < nents; i++, s = sg_next(s), d = sg_next(d)) {
+		struct page *page = sg_page(s);
+		unsigned int len = s->length;
+		sg_set_page(d, page, len, s->offset);
+	}
+	return dst;
+}
+
 struct sg_table *evdi_prime_get_sg_table(struct drm_gem_object *obj)
 {
 	struct evdi_gem_object *bo = to_evdi_bo(obj);
+
+	if (bo->sg) {
+		return evdi_dup_sg_table(bo->sg);
+	}
 
 #if KERNEL_VERSION(5, 10, 0) <= LINUX_VERSION_CODE || defined(EL8)
 	return drm_prime_pages_to_sg(obj->dev, bo->pages, bo->base.size >> PAGE_SHIFT);
