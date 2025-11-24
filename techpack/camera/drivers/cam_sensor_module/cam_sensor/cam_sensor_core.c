@@ -155,7 +155,7 @@ static int32_t cam_sensor_i2c_pkt_parse(struct cam_sensor_ctrl_t *s_ctrl,
 	csl_packet = (struct cam_packet *)(generic_ptr +
 		(uint32_t)config.offset);
 
-	if (cam_packet_util_validate_packet(csl_packet,
+	if ((csl_packet == NULL) || cam_packet_util_validate_packet(csl_packet,
 		remain_len)) {
 		CAM_ERR(CAM_SENSOR, "Invalid packet params");
 		rc = -EINVAL;
@@ -474,6 +474,16 @@ int32_t cam_sensor_update_slave_info(void *probe_info,
 
 		memcpy(s_ctrl->sensor_name, sensor_probe_info_v2->sensor_name,
 			CAM_SENSOR_NAME_MAX_SIZE-1);
+
+#ifdef CONFIG_CCI_ADDR_SWITCH
+		s_ctrl->i2c_addr_switch           =  sensor_probe_info_v2->i2c_addr_switch;
+		s_ctrl->second_i2c_address        =  sensor_probe_info_v2->second_i2c_address;
+		s_ctrl->i2c_switch_reg_addr_Type  =  sensor_probe_info_v2->i2c_switch_reg_addr_Type;
+		s_ctrl->i2c_switch_reg_data_Type  =  sensor_probe_info_v2->i2c_switch_reg_data_Type;
+		s_ctrl->i2c_switch_reg_addr       =  sensor_probe_info_v2->i2c_switch_reg_addr;
+		s_ctrl->i2c_switch_reg_data       =  sensor_probe_info_v2->i2c_switch_reg_data;
+		s_ctrl->i2c_switch_reg_delayMs    =  sensor_probe_info_v2->i2c_switch_reg_delayMs;
+#endif
 	}
 
 	CAM_DBG(CAM_SENSOR,
@@ -753,6 +763,10 @@ void cam_sensor_shutdown(struct cam_sensor_ctrl_t *s_ctrl)
 int cam_sensor_match_id(struct cam_sensor_ctrl_t *s_ctrl)
 {
 	int rc = 0;
+#ifdef CONFIG_CAM_SENSOR_PROBE_DEBUG
+	int retries = 5;
+	bool matched = false;
+#endif
 	uint32_t chipid = 0;
 	struct cam_camera_slave_info *slave_info;
 
@@ -767,11 +781,35 @@ int cam_sensor_match_id(struct cam_sensor_ctrl_t *s_ctrl)
 	if (s_ctrl->hw_no_ops)
 		return rc;
 
+#ifdef CONFIG_CAM_SENSOR_PROBE_DEBUG
+	while (retries-- && !matched) {
+		rc = camera_io_dev_read(
+			&(s_ctrl->io_master_info),
+			slave_info->sensor_id_reg_addr,
+			&chipid,
+			s_ctrl->sensor_probe_addr_type,
+			s_ctrl->sensor_probe_data_type);
+
+		CAM_INFO(CAM_SENSOR, "%s read id: 0x%x expected id 0x%x:",
+			s_ctrl->sensor_name, chipid, slave_info->sensor_id);
+
+		if (cam_sensor_id_by_mask(s_ctrl, chipid) == slave_info->sensor_id)
+			matched = true;
+
+		if (!matched && !retries) {
+			CAM_ERR(CAM_SENSOR, "Failed %s read id: 0x%x expected id 0x%x:",
+					s_ctrl->sensor_name, chipid,
+					slave_info->sensor_id);
+					return -ENODEV;
+		}
+	}
+#else
 	rc = camera_io_dev_read(
 		&(s_ctrl->io_master_info),
 		slave_info->sensor_id_reg_addr,
-		&chipid, CAMERA_SENSOR_I2C_TYPE_WORD,
-		CAMERA_SENSOR_I2C_TYPE_WORD);
+		&chipid,
+		s_ctrl->sensor_probe_addr_type,
+		s_ctrl->sensor_probe_data_type);
 
 	CAM_DBG(CAM_SENSOR, "%s read id: 0x%x expected id 0x%x:",
 		s_ctrl->sensor_name, chipid, slave_info->sensor_id);
@@ -782,8 +820,56 @@ int cam_sensor_match_id(struct cam_sensor_ctrl_t *s_ctrl)
 				slave_info->sensor_id);
 		return -ENODEV;
 	}
+#endif
 	return rc;
 }
+
+#ifdef CONFIG_CCI_ADDR_SWITCH
+int cam_sensor_set_i2c_addr_switch_reg(struct cam_sensor_ctrl_t *s_ctrl)
+{
+	int rc = 0;
+	uint16_t sensor_address = 0;
+	struct cam_sensor_i2c_reg_setting wr_setting;
+	struct cam_sensor_i2c_reg_array reg_setting;
+
+	/* if hal doesn't config i2c_addr_switch parameter in sensor xml, return success immediately */
+	if (!s_ctrl->i2c_addr_switch) {
+		return 0;
+	}
+
+	/* save sensor i2c address */
+	sensor_address = s_ctrl->io_master_info.cci_client->sid;
+
+	/* set sub-device i2c address */
+	if (s_ctrl->second_i2c_address) {
+		s_ctrl->io_master_info.cci_client->sid = s_ctrl->second_i2c_address >> 1;
+	}
+
+	reg_setting.reg_addr = s_ctrl->i2c_switch_reg_addr;
+	reg_setting.reg_data = s_ctrl->i2c_switch_reg_data;
+	reg_setting.delay = s_ctrl->i2c_switch_reg_delayMs;
+	reg_setting.data_mask = 0;
+	wr_setting.addr_type = s_ctrl->i2c_switch_reg_addr_Type;
+	wr_setting.data_type = s_ctrl->i2c_switch_reg_data_Type;
+	wr_setting.reg_setting = &reg_setting;
+	wr_setting.size = 1;
+	wr_setting.delay = 0;
+	rc = camera_io_dev_write(&s_ctrl->io_master_info, &wr_setting);
+
+	/* restore sensor i2c address */
+	s_ctrl->io_master_info.cci_client->sid = sensor_address;
+
+	if (rc == 0) {
+		CAM_INFO(CAM_SENSOR, "write i2c addr switch reg success");
+	}
+	else {
+		CAM_ERR(CAM_SENSOR, "write i2c addr switch reg failed!!!");
+		rc = -EINVAL;
+	}
+
+	return rc;
+}
+#endif
 
 int32_t cam_sensor_driver_cmd(struct cam_sensor_ctrl_t *s_ctrl,
 	void *arg)
@@ -868,22 +954,24 @@ int32_t cam_sensor_driver_cmd(struct cam_sensor_ctrl_t *s_ctrl,
 				);
 			goto free_power_settings;
 		}
-		if (s_ctrl->i2c_data.reg_bank_unlock_settings.is_settings_valid) {
-			rc = cam_sensor_apply_settings(s_ctrl, 0,
-				CAM_SENSOR_PACKET_OPCODE_SENSOR_REG_BANK_UNLOCK);
-			if (rc < 0) {
-				CAM_ERR(CAM_SENSOR, "REG_bank unlock failed");
-				cam_sensor_power_down(s_ctrl);
-				goto free_power_settings;
-			}
-			rc = delete_request(&(s_ctrl->i2c_data.reg_bank_unlock_settings));
-			if (rc < 0) {
-				CAM_ERR(CAM_SENSOR,
-					"failed while deleting REG_bank unlock settings");
-				cam_sensor_power_down(s_ctrl);
-				goto free_power_settings;
-			}
+
+#ifdef CONFIG_CCI_ADDR_SWITCH
+		/* load probe setting before read sensorID */
+		rc = cam_sensor_set_i2c_addr_switch_reg(s_ctrl);
+
+		if (rc < 0) {
+			CAM_ERR(CAM_SENSOR,
+				"set i2c addr switch reg failed for %s slot:%d, slave_addr:0x%x, sensor_id:0x%x",
+				s_ctrl->sensor_name,
+				s_ctrl->soc_info.index,
+				s_ctrl->sensordata->slave_info.sensor_slave_addr,
+				s_ctrl->sensordata->slave_info.sensor_id);
+			cam_sensor_power_down(s_ctrl);
+			msleep(20);
+			goto free_power_settings;
 		}
+#endif
+
 		/* Match sensor ID */
 		rc = cam_sensor_match_id(s_ctrl);
 		if (rc < 0) {
@@ -1130,6 +1218,7 @@ int32_t cam_sensor_driver_cmd(struct cam_sensor_ctrl_t *s_ctrl,
 		CAM_GET_TIMESTAMP(ts);
 		CAM_CONVERT_TIMESTAMP_FORMAT(ts, hrs, min, sec, ms);
 
+
 		CAM_INFO(CAM_SENSOR,
 			"%llu:%llu:%llu.%llu CAM_START_DEV Success for %s sensor_id:0x%x,sensor_slave_addr:0x%x",
 			hrs, min, sec, ms,
@@ -1164,6 +1253,7 @@ int32_t cam_sensor_driver_cmd(struct cam_sensor_ctrl_t *s_ctrl,
 
 		CAM_GET_TIMESTAMP(ts);
 		CAM_CONVERT_TIMESTAMP_FORMAT(ts, hrs, min, sec, ms);
+
 
 		CAM_INFO(CAM_SENSOR,
 			"%llu:%llu:%llu.%llu CAM_STOP_DEV Success for %s sensor_id:0x%x,sensor_slave_addr:0x%x",
