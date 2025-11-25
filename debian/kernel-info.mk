@@ -8,7 +8,7 @@
 VARIANT = android
 
 # Kernel base version
-KERNEL_BASE_VERSION = 5.10.233
+KERNEL_BASE_VERSION = 5.10.237
 
 # The kernel cmdline to use
 KERNEL_BOOTIMAGE_CMDLINE = 
