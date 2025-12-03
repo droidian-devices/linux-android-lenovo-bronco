@@ -24,6 +24,7 @@
 #include <linux/usb/dwc3-msm.h>
 #include <linux/usb/phy.h>
 #include <linux/usb/repeater.h>
+#include <linux/atomic.h>
 
 #define USB_PHY_UTMI_CTRL0		(0x3c)
 #define OPMODE_MASK			(0x3 << 3)
@@ -150,6 +151,8 @@
 #define USB_HSPHY_1P2_HPM_LOAD		5905	/* uA */
 
 #define USB_HSPHY_VDD_HPM_LOAD		7757	/* uA */
+
+extern atomic_t rndis_active;
 
 struct msm_eusb2_phy {
 	struct usb_phy		phy;
@@ -907,7 +910,15 @@ static void msm_eusb2_phy_vbus_draw_work(struct work_struct *w)
 		}
 	}
 
-	dev_info(phy->phy.dev, "Avail curr from USB = %u\n", phy->vbus_draw);
+	// ---- FORCE OVERRIDE FOR RNDIS ----
+	if (atomic_read(&rndis_active)) {
+	    dev_info(phy->phy.dev, "RNDIS active, overriding USB ICL to 500 mA\n");
+	    phy->vbus_draw = 500; // override
+	}
+	
+	// Log the requested VBUS draw
+	dev_info(phy->phy.dev, "Avail curr from USB = %u mA\n", phy->vbus_draw);
+
 	/* Set max current limit in uA */
 	val.intval = 1000 * phy->vbus_draw;
 	ret = power_supply_set_property(phy->usb_psy,
