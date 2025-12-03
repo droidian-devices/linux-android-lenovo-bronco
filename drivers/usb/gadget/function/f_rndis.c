@@ -66,6 +66,8 @@
  *   - MS-Windows drivers sometimes emit undocumented requests.
  */
 
+atomic_t rndis_active = ATOMIC_INIT(0);
+
 struct f_rndis {
 	struct gether			port;
 	u8				ctrl_id, data_id;
@@ -810,6 +812,8 @@ rndis_bind(struct usb_configuration *c, struct usb_function *f)
 	 * the network link ... which is unavailable to this code
 	 * until we're activated via set_alt().
 	 */
+	atomic_set(&rndis_active, 1); // RNDIS bound
+    pr_info("RNDIS bound\n");
 
 	DBG(cdev, "RNDIS: %s speed IN/%s OUT/%s NOTIFY/%s\n",
 			gadget_is_superspeed(c->cdev->gadget) ? "super" :
@@ -970,6 +974,8 @@ static void rndis_free(struct usb_function *f)
 static void rndis_unbind(struct usb_configuration *c, struct usb_function *f)
 {
 	struct f_rndis		*rndis = func_to_rndis(f);
+
+	atomic_set(&rndis_active, 0);
 
 	kfree(f->os_desc_table);
 	f->os_desc_n = 0;
