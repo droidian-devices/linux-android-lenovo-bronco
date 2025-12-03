@@ -870,8 +870,9 @@ static void battery_chg_update_usb_type_work(struct work_struct *work)
 
 	switch (pst->prop[USB_ADAP_TYPE]) {
 	case POWER_SUPPLY_USB_TYPE_SDP:
-		usb_psy_desc.type = POWER_SUPPLY_TYPE_USB;
-		break;
+        /* Allow charging in RNDIS/USB gadget mode by treating SDP as CDP */
+        usb_psy_desc.type = POWER_SUPPLY_TYPE_USB_CDP;
+        break;
 	case POWER_SUPPLY_USB_TYPE_DCP:
 	case POWER_SUPPLY_USB_TYPE_APPLE_BRICK_ID:
 	case QTI_POWER_SUPPLY_USB_TYPE_HVDCP:
