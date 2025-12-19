@@ -357,7 +357,9 @@ int evdi_gem_vmap(struct evdi_gem_object *obj)
 		}
 #else
 		obj->vmapping = dma_buf_vmap(obj->base.import_attach->dmabuf);
+#if KERNEL_VERSION(5, 11, 0) <= LINUX_VERSION_CODE
 		obj->vmap_is_iomem = false;
+#endif
 		if (!obj->vmapping)
 			return -ENOMEM;
 #endif
@@ -406,7 +408,9 @@ void evdi_gem_vunmap(struct evdi_gem_object *obj)
 #else
 		dma_buf_vunmap(obj->base.import_attach->dmabuf, obj->vmapping);
 #endif
+#if KERNEL_VERSION(5, 11, 0) <= LINUX_VERSION_CODE
 		obj->vmap_is_iomem = false;
+#endif
 		obj->vmapping = NULL;
 		return;
 	}
