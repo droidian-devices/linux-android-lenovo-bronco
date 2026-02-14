@@ -412,7 +412,7 @@ uint32_t evdi_gem_object_handle_lookup(struct drm_file *filp, struct drm_gem_obj
 struct sg_table *evdi_prime_get_sg_table(struct drm_gem_object *obj);
 struct drm_gem_object *evdi_gem_prime_import(struct drm_device *dev,
 					     struct dma_buf *dma_buf);
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 int evdi_prime_handle_to_fd(struct drm_device *dev,
     struct drm_file *file_priv,
     uint32_t handle,
