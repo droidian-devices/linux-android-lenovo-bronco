@@ -29,6 +29,7 @@
 #include <linux/percpu.h>
 #include <linux/llist.h>
 #include <linux/file.h>
+#include <linux/types.h>
 #include <linux/mempool.h>
 #include <linux/uaccess.h>
 #include <linux/jump_label.h>
@@ -154,10 +155,14 @@ struct evdi_gralloc_buf_user {
 	int data[EVDI_MAX_FDS + EVDI_MAX_INTS];
 };
 
+/* Must be +1 poll event types */
+#define EVDI_EVENT_TYPE_MAX 6
+
 struct evdi_event_pool {
 	struct kmem_cache *cache;
 	struct kmem_cache *drm_cache;
 	struct kmem_cache *inflight_cache;
+	struct kmem_cache *type_cache[EVDI_EVENT_TYPE_MAX];
 	mempool_t *inflight_pool;
 	mempool_t *gralloc_data_pool;
 };
@@ -166,6 +171,7 @@ struct evdi_event {
 	enum poll_event_type type;
 	int poll_id;
 	struct rcu_head rcu;
+	u8 cache_idx;
 	u8 payload[EVDI_EVENT_PAYLOAD_MAX];
 	u32 payload_size;
 	struct evdi_event *next;
@@ -308,6 +314,10 @@ struct evdi_device {
 
 	struct evdi_swap_mailbox swap_mailbox[LINDROID_MAX_CONNECTORS];
 
+	wait_queue_head_t swap_ack_waitq;
+	atomic_t swap_pending[LINDROID_MAX_CONNECTORS];
+	atomic_t swap_pending_pollid[LINDROID_MAX_CONNECTORS];
+
 	struct mutex config_mutex;
 
 	struct platform_device *pdev;
@@ -402,6 +412,18 @@ uint32_t evdi_gem_object_handle_lookup(struct drm_file *filp, struct drm_gem_obj
 struct sg_table *evdi_prime_get_sg_table(struct drm_gem_object *obj);
 struct drm_gem_object *evdi_gem_prime_import(struct drm_device *dev,
 					     struct dma_buf *dma_buf);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)
+int evdi_prime_handle_to_fd(struct drm_device *dev,
+    struct drm_file *file_priv,
+    uint32_t handle,
+    uint32_t flags,
+    int *prime_fd);
+int evdi_prime_fd_to_handle(struct drm_device *dev,
+    struct drm_file *file_priv,
+    int prime_fd,
+    uint32_t *handle);
+#endif
+
 #if KERNEL_VERSION(4, 17, 0) <= LINUX_VERSION_CODE
 vm_fault_t evdi_gem_fault(struct vm_fault *vmf);
 #else

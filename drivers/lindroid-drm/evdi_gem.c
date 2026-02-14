@@ -11,6 +11,9 @@
 
 #include <linux/shmem_fs.h>
 #include <linux/dma-buf.h>
+#include <linux/fdtable.h>
+#include <linux/fs.h>
+#include <linux/err.h>
 #include <drm/drm_cache.h>
 #include <linux/vmalloc.h>
 #include <linux/version.h>
@@ -357,6 +360,98 @@ struct drm_gem_object *evdi_gem_prime_import(struct drm_device *dev,
 	obj->base.import_attach = attach;
 	return &obj->base;
 }
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)
+
+static int evdi_export_id_as_fd(int id, uint32_t flags, int *out_fd)
+{
+	struct file *f;
+	int fd_flags = 0;
+	int newfd;
+	loff_t pos = 0;
+	ssize_t wr;
+
+	if (!out_fd)
+		return -EINVAL;
+	if (id <= 0)
+		return -EINVAL;
+
+	if (flags & DRM_CLOEXEC)
+		fd_flags |= O_CLOEXEC;
+
+	f = shmem_file_setup("evdi-bufid", sizeof(id), 0);
+	if (IS_ERR(f))
+		return PTR_ERR(f);
+
+	newfd = get_unused_fd_flags(fd_flags);
+	if (newfd < 0) {
+		fput(f);
+		return newfd;
+	}
+
+	wr = kernel_write(f, (const char *)&id, sizeof(id), &pos);
+	if (wr != sizeof(id)) {
+		put_unused_fd(newfd);
+		fput(f);
+		return (wr < 0) ? (int)wr : -EIO;
+	}
+
+	fd_install(newfd, f);
+	*out_fd = newfd;
+	return 0;
+}
+
+static int evdi_read_id_from_fd(int fd_u32, int *out_id)
+{
+	loff_t pos = 0;
+	ssize_t rd;
+	int id;
+	struct file *memfd_file;
+
+	if (!out_id)
+		return -EINVAL;
+	if (fd_u32 <= 0 || fd_u32 > INT_MAX)
+		return -EBADF;
+
+	memfd_file = fget(fd_u32);
+	if (!memfd_file)
+		return -EINVAL;
+
+	rd = kernel_read(memfd_file, &id, sizeof(id), &pos);
+	if (rd != sizeof(id))
+		return -EINVAL;
+	evdi_debug("Got handle id: %d from fd: %d\n", id, fd_u32);
+	*out_id = id;
+	return 0;
+}
+
+int evdi_prime_handle_to_fd(struct drm_device *dev,
+			    struct drm_file *file_priv,
+			    uint32_t handle,
+			    uint32_t flags,
+			    int *prime_fd)
+{
+	return evdi_export_id_as_fd((int)handle, flags, prime_fd);
+}
+
+int evdi_prime_fd_to_handle(struct drm_device *dev,
+			    struct drm_file *file_priv,
+			    int prime_fd,
+			    uint32_t *handle)
+{
+	int id, ret;
+
+	if (!handle)
+		return -EINVAL;
+
+	ret = evdi_read_id_from_fd(prime_fd, &id);
+	if (ret)
+		return ret;
+
+	*handle = (uint32_t)id;
+	return 0;
+}
+#endif /* KVER >= 5.11 */
 
 void evdi_gem_vunmap(struct evdi_gem_object *obj)
 {

@@ -12,6 +12,7 @@
 #include "evdi_drv.h"
 #include <linux/platform_device.h>
 #include <linux/of.h>
+#include <linux/wait.h>
 
 extern int evdi_event_system_init(void);
 extern void evdi_event_system_cleanup(void);
@@ -75,8 +76,8 @@ static struct drm_driver evdi_driver = {
 #endif
 	.gem_prime_import = evdi_gem_prime_import,
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)
-	.prime_handle_to_fd = drm_gem_prime_handle_to_fd,
-	.prime_fd_to_handle = drm_gem_prime_fd_to_handle,
+	.prime_handle_to_fd = evdi_prime_handle_to_fd,
+	.prime_fd_to_handle = evdi_prime_fd_to_handle,
 #endif
 
 	.open = evdi_driver_open,
@@ -135,9 +136,6 @@ static void evdi_driver_postclose(struct drm_device *dev, struct drm_file *file)
 {
 	struct evdi_device *evdi = dev->dev_private;
 	struct evdi_file_priv *priv = file->driver_priv;
-	struct drm_file *client;
-	bool send_destroy = false;
-	void *entry;
 
 	if (unlikely(!evdi))
 		return;
@@ -152,46 +150,17 @@ static void evdi_driver_postclose(struct drm_device *dev, struct drm_file *file)
 
 	evdi_event_cleanup_file(evdi, file);
 
-	client = READ_ONCE(evdi->drm_client);
-	send_destroy = (client && client != file);
-
 	if (priv) {
 		mutex_lock(&priv->lock);
 #ifdef EVDI_HAVE_XARRAY
 #ifdef EVDI_HAVE_XA_ALLOC_CYCLIC
-		{
-			unsigned long handle;
-
-			xa_for_each(&priv->handle_to_bufid, handle, entry) {
-				if (send_destroy)
-					evdi_queue_destroy_event(evdi,
-								 (int)xa_to_value(entry),
-								 client);
-			}
-			xa_destroy(&priv->handle_to_bufid);
-			xa_destroy(&priv->bufid_to_handle);
-		}
+		xa_destroy(&priv->handle_to_bufid);
+		xa_destroy(&priv->bufid_to_handle);
 #else
-		{
-			unsigned long id;
-
-			xa_for_each(&priv->buffers, id, entry) {
-				if (send_destroy)
-					evdi_queue_destroy_event(evdi, (int)id, client);
-			}
-			xa_destroy(&priv->buffers);
-		}
+		xa_destroy(&priv->buffers);
 #endif
 #else
-		{
-			int id;
-
-			idr_for_each_entry(&priv->buffers, entry, id) {
-				if (send_destroy)
-					evdi_queue_destroy_event(evdi, id, client);
-			}
-			idr_destroy(&priv->buffers);
-		}
+		idr_destroy(&priv->buffers);
 #endif
 		mutex_unlock(&priv->lock);
 
@@ -218,6 +187,12 @@ int evdi_device_init(struct evdi_device *evdi, struct platform_device *pdev)
 	evdi->drm_client = NULL;
 
 	mutex_init(&evdi->config_mutex);
+
+	init_waitqueue_head(&evdi->swap_ack_waitq);
+	for (i = 0; i < LINDROID_MAX_CONNECTORS; i++) {
+		atomic_set(&evdi->swap_pending[i], 0);
+		atomic_set(&evdi->swap_pending_pollid[i], 0);
+	}
 	
 #ifdef EVDI_HAVE_XARRAY
 	xa_init_flags(&evdi->file_xa, XA_FLAGS_ALLOC);
