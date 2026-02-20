@@ -25,34 +25,6 @@ struct evdi_perf_counters evdi_perf;
 
 static DEFINE_PER_CPU(int, evdi_inflight_last_slot);
 
-static __always_inline bool evdi_swap_pending_for_file(struct evdi_device *evdi,
-						       struct drm_file *file)
-{
-	struct evdi_file_priv *priv;
-	int i;
-
-	if (unlikely(!evdi || !file))
-		return false;
-
-	priv = file->driver_priv;
-	if (unlikely(!priv))
-		return false;
-
-	for (i = 0; i < LINDROID_MAX_CONNECTORS; i++) {
-		u64 seq;
-
-		if (READ_ONCE(evdi->swap_mailbox[i].owner) != file)
-			continue;
-		seq = (u64)atomic64_read(&evdi->swap_mailbox[i].seq);
-		if (seq & 1)
-			continue;
-		if (seq != priv->last_swap_seq[i])
-			return true;
-	}
-
-	return false;
-}
-
 static void *evdi_inflight_req_pool_alloc(gfp_t gfp_mask, void *pool_data)
 {
 	return kvzalloc(sizeof(struct evdi_inflight_req), gfp_mask);
@@ -209,13 +181,6 @@ int evdi_event_init(struct evdi_device *evdi)
 	atomic64_set(&evdi->events.events_dequeued, 0);
 	atomic_set(&evdi->events.wake_pending, 0);
 
-	for (i = 0; i < LINDROID_MAX_CONNECTORS; i++) {
-		atomic64_set(&evdi->swap_mailbox[i].seq, 0);
-		atomic64_set(&evdi->swap_mailbox[i].payload, 0);
-		atomic_set(&evdi->swap_mailbox[i].poll_id, 0);
-		WRITE_ONCE(evdi->swap_mailbox[i].owner, NULL);
-	}
-
 	evdi_smp_wmb();
 
 	evdi_debug("Event system initialized for device %d", evdi->dev_index);
@@ -234,15 +199,6 @@ void evdi_event_cleanup(struct evdi_device *evdi)
 	atomic_set(&evdi->events.stopping, 1);
 
 	evdi_smp_wmb();
-
-	for (i = 0; i < LINDROID_MAX_CONNECTORS; i++) {
-		atomic64_inc(&evdi->swap_mailbox[i].seq);
-		WRITE_ONCE(evdi->swap_mailbox[i].owner, NULL);
-		atomic_set(&evdi->swap_mailbox[i].poll_id, 0);
-		atomic64_set(&evdi->swap_mailbox[i].payload, 0);
-		evdi_smp_wmb();
-		atomic64_inc(&evdi->swap_mailbox[i].seq);
-	}
 
 	if (evdi->percpu_inflight) {
 		free_percpu(evdi->percpu_inflight);
@@ -628,18 +584,6 @@ void evdi_event_cleanup_file(struct evdi_device *evdi, struct drm_file *file)
 	if (unlikely(!evdi || !file))
 		return;
 
-	for (d = 0; d < LINDROID_MAX_CONNECTORS; d++) {
-		if (READ_ONCE(evdi->swap_mailbox[d].owner) != file)
-			continue;
-
-		atomic64_inc(&evdi->swap_mailbox[d].seq);
-		WRITE_ONCE(evdi->swap_mailbox[d].owner, NULL);
-		atomic_set(&evdi->swap_mailbox[d].poll_id, 0);
-		atomic64_set(&evdi->swap_mailbox[d].payload, 0);
-		evdi_smp_wmb();
-		atomic64_inc(&evdi->swap_mailbox[d].seq);
-	}
-
 	if (atomic_read(&evdi->events.queue_size) == 0 &&
 	    llist_empty(&evdi->events.lockfree_head))
 		return;
@@ -737,11 +681,6 @@ int evdi_event_wait(struct evdi_device *evdi, struct drm_file *file)
 
 		evdi_smp_mb();
 		if (atomic_read(&evdi->events.queue_size) > 0) {
-			ret = 0;
-			break;
-		}
-
-		if (evdi_swap_pending_for_file(evdi, file)) {
 			ret = 0;
 			break;
 		}

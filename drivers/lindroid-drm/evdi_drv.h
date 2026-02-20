@@ -235,13 +235,6 @@ struct evdi_swap {
 	int display_id;
 };
 
-struct evdi_swap_mailbox {
-	atomic64_t	seq;
-	atomic64_t	payload; /* (u32)id << 32 | (u32)display_id */
-	atomic_t	poll_id;
-	struct drm_file	*owner;
-};
-
 static __always_inline u64 evdi_swap_pack(int id, int display_id)
 {
 	return ((u64)(u32)id << 32) | (u64)(u32)display_id;
@@ -284,6 +277,7 @@ struct evdi_device {
 	struct drm_device *ddev;
 	struct drm_connector *connector[LINDROID_MAX_CONNECTORS];
 	struct drm_simple_display_pipe pipe[LINDROID_MAX_CONNECTORS];
+	struct drm_pending_vblank_event *pending_event[LINDROID_MAX_CONNECTORS];
 
 	int dev_index;
 
@@ -311,12 +305,6 @@ struct evdi_device {
 		atomic64_t events_queued;
 		atomic64_t events_dequeued;
 	} events;
-
-	struct evdi_swap_mailbox swap_mailbox[LINDROID_MAX_CONNECTORS];
-
-	wait_queue_head_t swap_ack_waitq;
-	atomic_t swap_pending[LINDROID_MAX_CONNECTORS];
-	atomic_t swap_pending_pollid[LINDROID_MAX_CONNECTORS];
 
 	struct mutex config_mutex;
 
@@ -373,7 +361,6 @@ int evdi_ioctl_connect(struct drm_device *dev, void *data, struct drm_file *file
 int evdi_ioctl_poll(struct drm_device *dev, void *data, struct drm_file *file);
 int evdi_ioctl_get_buff_callback(struct drm_device *dev, void *data, struct drm_file *file);
 int evdi_ioctl_destroy_buff_callback(struct drm_device *dev, void *data, struct drm_file *file);
-int evdi_ioctl_swap_callback(struct drm_device *dev, void *data, struct drm_file *file);
 int evdi_ioctl_create_buff_callback(struct drm_device *dev, void *data, struct drm_file *file);
 int evdi_ioctl_gbm_create_buff(struct drm_device *dev, void *data, struct drm_file *file);
 void evdi_inflight_discard_owner(struct evdi_device *evdi, struct drm_file *owner);
@@ -382,6 +369,7 @@ int evdi_ioctl_gbm_get_buff(struct drm_device *dev, void *data, struct drm_file 
 int evdi_ioctl_gbm_del_buff(struct drm_device *dev, void *data, struct drm_file *file);
 int evdi_queue_swap_event(struct evdi_device *evdi, int id, int display_id, struct drm_file *owner);
 int evdi_queue_destroy_event(struct evdi_device *evdi, int id, struct drm_file *owner);
+int evdi_ioctl_vsync(struct drm_device *dev, void *data, struct drm_file *file);
 
 /* evdi_event.c */
 int evdi_event_init(struct evdi_device *evdi);

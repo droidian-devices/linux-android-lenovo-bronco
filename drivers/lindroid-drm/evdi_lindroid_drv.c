@@ -54,12 +54,12 @@ static const struct drm_ioctl_desc evdi_ioctls[] = {
 			 EVDI_IOCTL_FLAGS),
 	DRM_IOCTL_DEF_DRV(EVDI_DESTROY_BUFF_CALLBACK, evdi_ioctl_destroy_buff_callback,
 			 EVDI_IOCTL_FLAGS),
-	DRM_IOCTL_DEF_DRV(EVDI_SWAP_CALLBACK, evdi_ioctl_swap_callback,
-			 EVDI_IOCTL_FLAGS),
 	DRM_IOCTL_DEF_DRV(EVDI_GBM_CREATE_BUFF_CALLBACK, evdi_ioctl_create_buff_callback,
 			 EVDI_IOCTL_FLAGS),
 	DRM_IOCTL_DEF_DRV(EVDI_GBM_DEL_BUFF, evdi_ioctl_gbm_del_buff,
 			 EVDI_IOCTL_FLAGS),
+	DRM_IOCTL_DEF_DRV(EVDI_VSYNC, evdi_ioctl_vsync,
+			DRM_RENDER_ALLOW),
 };
 
 static struct drm_driver evdi_driver = {
@@ -187,12 +187,6 @@ int evdi_device_init(struct evdi_device *evdi, struct platform_device *pdev)
 	evdi->drm_client = NULL;
 
 	mutex_init(&evdi->config_mutex);
-
-	init_waitqueue_head(&evdi->swap_ack_waitq);
-	for (i = 0; i < LINDROID_MAX_CONNECTORS; i++) {
-		atomic_set(&evdi->swap_pending[i], 0);
-		atomic_set(&evdi->swap_pending_pollid[i], 0);
-	}
 	
 #ifdef EVDI_HAVE_XARRAY
 	xa_init_flags(&evdi->file_xa, XA_FLAGS_ALLOC);
@@ -318,12 +312,6 @@ static int evdi_platform_probe(struct platform_device *pdev)
 		evdi_err("Failed to initialize modeset: %d", ret);
 		goto err_modeset;
 	}
-
-#if !EVDI_HAVE_ATOMIC_HELPERS
-	ret = drm_vblank_init(ddev, LINDROID_MAX_CONNECTORS);
-	if (ret)
-		evdi_warn("vblank init failed: %d", ret);
-#endif
 
 	drm_kms_helper_poll_init(ddev);
 

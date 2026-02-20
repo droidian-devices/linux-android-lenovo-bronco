@@ -29,6 +29,7 @@ static void evdi_pipe_enable(struct drm_simple_display_pipe *pipe,
 			     struct drm_crtc_state *crtc_state,
 			     struct drm_plane_state *plane_state)
 {
+	drm_crtc_vblank_on(&pipe->crtc);
 }
 #else
 static void evdi_pipe_enable(struct drm_simple_display_pipe *pipe,
@@ -40,70 +41,77 @@ static void evdi_pipe_enable(struct drm_simple_display_pipe *pipe,
 
 static void evdi_pipe_disable(struct drm_simple_display_pipe *pipe)
 {
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 19, 0)
-	drm_crtc_vblank_off(&pipe->crtc);
-#endif
+    struct evdi_device *evdi = pipe->plane.dev->dev_private;
+    struct drm_crtc *crtc = &pipe->crtc;
+    unsigned long flags;
+    int slot;
+
+    slot = evdi_connector_slot(evdi, pipe->connector);
+
+    spin_lock_irqsave(&evdi->ddev->event_lock, flags);
+
+    if (crtc->state && crtc->state->event) {
+        evdi_debug("Completing CRTC state event during disable (slot %d)\n", slot);
+        drm_crtc_send_vblank_event(crtc, crtc->state->event);
+        crtc->state->event = NULL;
+    }
+
+    if (evdi->pending_event[slot]) {
+        evdi_debug("Completing pending_event during disable (slot %d)\n", slot);
+        drm_crtc_send_vblank_event(crtc, evdi->pending_event[slot]);
+        evdi->pending_event[slot] = NULL;
+    }
+
+    spin_unlock_irqrestore(&evdi->ddev->event_lock, flags);
+
+    drm_crtc_vblank_off(crtc);
 }
 
 static void evdi_pipe_update(struct drm_simple_display_pipe *pipe,
-			     struct drm_plane_state *old_state)
+                             struct drm_plane_state *old_state)
 {
-	struct drm_plane_state *state = pipe->plane.state;
-	struct drm_framebuffer *fb = state ? state->fb : NULL;
-	struct evdi_device *evdi = pipe->plane.dev->dev_private;
-	struct evdi_framebuffer *efb;
-	int slot;
-	unsigned long timeout;
-	long w;
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 19, 0)
-	struct drm_pending_vblank_event *vblank_ev;
-	struct drm_device *ddev;
-	unsigned long flags;
+    struct drm_plane_state *state = pipe->plane.state;
+    struct drm_framebuffer *fb = state ? state->fb : NULL;
+    struct evdi_device *evdi = pipe->plane.dev->dev_private;
+    struct drm_crtc *crtc = &pipe->crtc;
+    struct evdi_framebuffer *efb;
+    int slot;
 
-	drm_crtc_handle_vblank(&pipe->crtc);
-	if (pipe->crtc.state && pipe->crtc.state->event) {
-		ddev = pipe->crtc.dev;
-		vblank_ev = pipe->crtc.state->event;
-		pipe->crtc.state->event = NULL;
-		spin_lock_irqsave(&ddev->event_lock, flags);
-		drm_crtc_send_vblank_event(&pipe->crtc, vblank_ev);
-		spin_unlock_irqrestore(&ddev->event_lock, flags);
-	}
-#endif
+    if (!state || !fb)
+        return;
 
-	if (!state || !fb)
-		return;
+    slot = evdi_connector_slot(evdi, pipe->connector);
 
-	slot = evdi_connector_slot(evdi, pipe->connector);
+    if (crtc->state && crtc->state->event) {
+        spin_lock(&evdi->ddev->event_lock);
 
-	/* Backpressure: wait for userspace to ACK the previous swap */
-	//TODO: maybe remove timeout?
-	timeout = msecs_to_jiffies(250);
-	if (atomic_read(&evdi->swap_pending[slot])) {
-		w = wait_event_interruptible_timeout(
-			evdi->swap_ack_waitq,
-			!atomic_read(&evdi->swap_pending[slot]) ||
-				atomic_read(&evdi->events.stopping) ||
-				!READ_ONCE(evdi->drm_client),
-			timeout);
+        if (evdi->pending_event[slot]) {
+            evdi_debug("Pageflip event pending (slot %d), sent old event.\n", slot);
+            drm_crtc_send_vblank_event(crtc, evdi->pending_event[slot]);
+        }
 
-		if (w == 0) {
-			/* Drop backpressure to avoid stalls. */
-			atomic_set(&evdi->swap_pending_pollid[slot], 0);
-			atomic_set(&evdi->swap_pending[slot], 0);
-		}
-	}
+        evdi->pending_event[slot] = crtc->state->event;
+        crtc->state->event = NULL;
 
-	efb = to_evdi_fb(fb);
+        spin_unlock(&evdi->ddev->event_lock);
+    }
 
-	if (efb && efb->owner && efb->gralloc_buf_id)
-		evdi_queue_swap_event(evdi,
-				      efb->gralloc_buf_id,
-				      slot,
-				      efb->owner);
+    efb = to_evdi_fb(fb);
 
-	if (unlikely(!READ_ONCE(evdi->drm_client)))
-		return;
+    if (efb && efb->owner && efb->gralloc_buf_id) {
+        evdi_queue_swap_event(evdi,
+                              efb->gralloc_buf_id,
+                              slot,
+                              efb->owner);
+    } else {
+        evdi_err("condition failed (efb=%p owner=%p gralloc_buf_id=%u)\n",
+                efb,
+                efb ? efb->owner : NULL,
+                efb ? efb->gralloc_buf_id : 0);
+    }
+
+    if (unlikely(!READ_ONCE(evdi->drm_client)))
+        return;
 }
 
 #if !EVDI_HAVE_ATOMIC_HELPERS
@@ -145,15 +153,17 @@ int evdi_modeset_init(struct drm_device *dev)
 	int ret = 0;
 	int i;
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 4, 0)
 	ret = drm_mode_config_init(dev);
 	if (ret) {
 		evdi_err("Failed to initialize mode config: %d", ret);
 		return ret;
 	}
-#else
-	drm_mode_config_init(dev);
-#endif
+
+	ret = drm_vblank_init(dev, LINDROID_MAX_CONNECTORS);
+	if (ret) {
+	    evdi_err("Failed to init vblank: %d", ret);
+	    goto err_mode_config;
+	}
 
 	dev->mode_config.min_width = 640;
 	dev->mode_config.min_height = 480;
@@ -168,7 +178,7 @@ int evdi_modeset_init(struct drm_device *dev)
 	ret = evdi_connector_init(dev, evdi);
 	if (ret) {
 		evdi_err("Failed to initialize connector: %d", ret);
-		goto err_connector;
+		goto err_mode_config;
 	}
 	for (i = 0; i < LINDROID_MAX_CONNECTORS; i++) {
 		ret = drm_simple_display_pipe_init(dev, &evdi->pipe[i], &evdi_pipe_funcs,
@@ -180,17 +190,6 @@ int evdi_modeset_init(struct drm_device *dev)
 		}
 	}
 
-#if !EVDI_HAVE_ATOMIC_HELPERS
-	for (i = 0; i < LINDROID_MAX_CONNECTORS; i++) {
-		static const struct drm_crtc_helper_funcs crtc_helper = {
-			.dpms = evdi_crtc_dpms,
-			.mode_fixup = evdi_crtc_mode_fixup,
-			.mode_set = evdi_crtc_mode_set,
-			.commit = evdi_crtc_commit,
-		};
-		drm_crtc_helper_add(&evdi->pipe[i].crtc, &crtc_helper);
-	}
-#endif
 	drm_mode_config_reset(dev);
 
 	evdi_info("Modeset initialized for device %d", evdi->dev_index);
@@ -198,18 +197,38 @@ int evdi_modeset_init(struct drm_device *dev)
 
 err_pipe:
 	evdi_connector_cleanup(evdi);
-err_connector:
+err_mode_config:
 	drm_mode_config_cleanup(dev);
 	return ret;
 }
 
 void evdi_modeset_cleanup(struct drm_device *dev)
 {
-	struct evdi_device *evdi = dev->dev_private;
+    struct evdi_device *evdi = dev->dev_private;
+    unsigned long flags;
+    int i;
 
-	evdi_connector_cleanup(evdi);
+    for (i = 0; i < LINDROID_MAX_CONNECTORS; i++) {
+        struct drm_crtc *crtc = &evdi->pipe[i].crtc;
 
-	drm_mode_config_cleanup(dev);
+        spin_lock_irqsave(&evdi->ddev->event_lock, flags);
 
-	evdi_debug("Modeset cleaned up for device %d", evdi->dev_index);
+        if (crtc->state && crtc->state->event) {
+            drm_crtc_send_vblank_event(crtc, crtc->state->event);
+            crtc->state->event = NULL;
+        }
+
+        if (evdi->pending_event[i]) {
+            drm_crtc_send_vblank_event(crtc, evdi->pending_event[i]);
+            evdi->pending_event[i] = NULL;
+        }
+
+        spin_unlock_irqrestore(&evdi->ddev->event_lock, flags);
+    }
+
+    drm_atomic_helper_shutdown(dev);
+    evdi_connector_cleanup(evdi);
+    drm_mode_config_cleanup(dev);
+
+    evdi_debug("Modeset cleaned up for device %d", evdi->dev_index);
 }
