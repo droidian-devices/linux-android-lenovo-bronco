@@ -370,6 +370,8 @@ int evdi_ioctl_gbm_del_buff(struct drm_device *dev, void *data, struct drm_file 
 int evdi_queue_swap_event(struct evdi_device *evdi, int id, int display_id, struct drm_file *owner);
 int evdi_queue_destroy_event(struct evdi_device *evdi, int id, struct drm_file *owner);
 int evdi_ioctl_vsync(struct drm_device *dev, void *data, struct drm_file *file);
+int evdi_ioctl_cursor_set(struct drm_device *dev, void *data, struct drm_file *file);
+int evdi_ioctl_cursor_move(struct drm_device *dev, void *data, struct drm_file *file);
 
 /* evdi_event.c */
 int evdi_event_init(struct evdi_device *evdi);

@@ -1021,3 +1021,9 @@ int evdi_ioctl_vsync(struct drm_device *dev,
 
     return 0;
 }
+
+int evdi_ioctl_cursor_set(struct drm_device *dev, void *data,
+                          struct drm_file *file) { return 0; }
+
+int evdi_ioctl_cursor_move(struct drm_device *dev, void *data,
+                           struct drm_file *file) { return 0; }
