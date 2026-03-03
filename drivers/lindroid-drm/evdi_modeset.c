@@ -26,21 +26,84 @@ static const uint32_t evdi_formats[] = {
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0)
 static void evdi_pipe_enable(struct drm_simple_display_pipe *pipe,
-			     struct drm_crtc_state *crtc_state,
-			     struct drm_plane_state *plane_state)
+                             struct drm_crtc_state *crtc_state,
+                             struct drm_plane_state *plane_state)
 {
-	drm_crtc_vblank_on(&pipe->crtc);
+    struct evdi_pipe *ep = container_of(pipe, struct evdi_pipe, base);
+    struct drm_display_mode *mode = &crtc_state->mode;
+    u64 refresh_hz;
+    u64 period_ns;
+
+    drm_crtc_vblank_on(&pipe->crtc);
+
+    refresh_hz = drm_mode_vrefresh(mode);
+    if (!refresh_hz)
+        refresh_hz = 60;
+
+    pr_info("REFRESHRATE: %d", refresh_hz);
+    period_ns = div_u64(1000000000ULL, refresh_hz);
+    ep->period = ns_to_ktime(period_ns);
+    ep->next_vblank = ktime_add(ktime_get(), ep->period);
+
+    hrtimer_init(&ep->vblank_timer, CLOCK_MONOTONIC, HRTIMER_MODE_ABS);
+    ep->vblank_timer.function = evdi_vblank_timer_func;
+    hrtimer_start(&ep->vblank_timer, ep->next_vblank, HRTIMER_MODE_ABS);
+    ep->timer_running = true;
 }
 #else
 static void evdi_pipe_enable(struct drm_simple_display_pipe *pipe,
-			     struct drm_crtc_state *crtc_state)
+                             struct drm_crtc_state *crtc_state)
 {
-	drm_crtc_vblank_on(&pipe->crtc);
+    struct evdi_pipe *ep = container_of(pipe, struct evdi_pipe, base);
+    u64 refresh_hz;
+    u64 period_ns;
+
+    drm_crtc_vblank_on(&pipe->crtc);
+
+    refresh_hz = drm_mode_vrefresh(&crtc_state->mode);
+    if (!refresh_hz)
+        refresh_hz = 60;
+
+    pr_info("REFRESHRATE: %d", refresh_hz);
+    period_ns = div_u64(1000000000ULL, refresh_hz);
+    ep->period = ns_to_ktime(period_ns);
+    ep->next_vblank = ktime_add(ktime_get(), ep->period);
+
+    hrtimer_init(&ep->vblank_timer, CLOCK_MONOTONIC, HRTIMER_MODE_ABS);
+    ep->vblank_timer.function = evdi_vblank_timer_func;
+    hrtimer_start(&ep->vblank_timer, ep->next_vblank, HRTIMER_MODE_ABS);
+    ep->timer_running = true;
 }
 #endif
 
+enum hrtimer_restart evdi_vblank_timer_func(struct hrtimer *t)
+{
+    struct evdi_pipe *ep = container_of(t, struct evdi_pipe, vblank_timer);
+    struct drm_crtc *crtc = &ep->base.crtc;
+    struct drm_device *dev = crtc->dev;
+    unsigned long flags;
+
+    drm_crtc_handle_vblank(crtc);
+
+    if (smp_load_acquire(&ep->flipped) && ep->pending_event) {
+        spin_lock_irqsave(&dev->event_lock, flags);
+
+        drm_crtc_send_vblank_event(crtc, ep->pending_event);
+        ep->pending_event = NULL;
+
+        smp_store_release(&ep->flipped, false);
+
+        spin_unlock_irqrestore(&dev->event_lock, flags);
+    }
+
+    hrtimer_forward_now(&ep->vblank_timer, ep->period);
+
+    return HRTIMER_RESTART;
+}
+
 static void evdi_pipe_disable(struct drm_simple_display_pipe *pipe)
 {
+    struct evdi_pipe *ep = container_of(pipe, struct evdi_pipe, base);
     struct evdi_device *evdi = pipe->plane.dev->dev_private;
     struct drm_crtc *crtc = &pipe->crtc;
     unsigned long flags;
@@ -56,13 +119,19 @@ static void evdi_pipe_disable(struct drm_simple_display_pipe *pipe)
         crtc->state->event = NULL;
     }
 
-    if (evdi->pending_event[slot]) {
+    if (ep->pending_event) {
         evdi_debug("Completing pending_event during disable (slot %d)\n", slot);
-        drm_crtc_send_vblank_event(crtc, evdi->pending_event[slot]);
-        evdi->pending_event[slot] = NULL;
+        drm_crtc_send_vblank_event(crtc, ep->pending_event);
+        ep->pending_event = NULL;
+        ep->flipped = false;
     }
 
     spin_unlock_irqrestore(&evdi->ddev->event_lock, flags);
+
+    if (ep->timer_running) {
+        hrtimer_cancel(&ep->vblank_timer);
+        ep->timer_running = false;
+    }
 
     drm_crtc_vblank_off(crtc);
 }
@@ -75,6 +144,7 @@ static void evdi_pipe_update(struct drm_simple_display_pipe *pipe,
     struct evdi_device *evdi = pipe->plane.dev->dev_private;
     struct drm_crtc *crtc = &pipe->crtc;
     struct evdi_framebuffer *efb;
+    struct evdi_pipe *ep = container_of(pipe, struct evdi_pipe, base);
     int slot;
 
     if (!state || !fb)
@@ -85,12 +155,13 @@ static void evdi_pipe_update(struct drm_simple_display_pipe *pipe,
     if (crtc->state && crtc->state->event) {
         spin_lock(&evdi->ddev->event_lock);
 
-        if (evdi->pending_event[slot]) {
-            evdi_debug("Pageflip event pending (slot %d), sent old event.\n", slot);
-            drm_crtc_send_vblank_event(crtc, evdi->pending_event[slot]);
+        if (ep->pending_event) {
+            evdi_debug("Pageflip event pending (slot %d), sending old event.\n", slot);
+            drm_crtc_send_vblank_event(crtc, ep->pending_event);
         }
 
-        evdi->pending_event[slot] = crtc->state->event;
+        ep->pending_event = crtc->state->event;
+        ep->flipped = false;
         crtc->state->event = NULL;
 
         spin_unlock(&evdi->ddev->event_lock);
@@ -180,14 +251,21 @@ int evdi_modeset_init(struct drm_device *dev)
 		evdi_err("Failed to initialize connector: %d", ret);
 		goto err_mode_config;
 	}
+
 	for (i = 0; i < LINDROID_MAX_CONNECTORS; i++) {
-		ret = drm_simple_display_pipe_init(dev, &evdi->pipe[i], &evdi_pipe_funcs,
-						   evdi_formats, ARRAY_SIZE(evdi_formats),
-						   NULL, evdi->connector[i]);
-		if (ret) {
-			evdi_err("Failed to initialize simple display pipe[%d]: %d", i, ret);
-			goto err_pipe;
-		}
+	    struct evdi_pipe *ep = &evdi->pipe[i];
+
+	    ret = drm_simple_display_pipe_init(dev,
+	                                      &ep->base,
+	                                      &evdi_pipe_funcs,
+	                                      evdi_formats,
+	                                      ARRAY_SIZE(evdi_formats),
+	                                      NULL,
+	                                      evdi->connector[i]);
+	    if (ret) {
+	        evdi_err("Failed to initialize simple display pipe[%d]: %d", i, ret);
+	        goto err_pipe;
+	    }
 	}
 
 	drm_mode_config_reset(dev);
@@ -209,7 +287,13 @@ void evdi_modeset_cleanup(struct drm_device *dev)
     int i;
 
     for (i = 0; i < LINDROID_MAX_CONNECTORS; i++) {
-        struct drm_crtc *crtc = &evdi->pipe[i].crtc;
+        struct evdi_pipe *ep = &evdi->pipe[i];
+        struct drm_crtc *crtc = &ep->base.crtc;
+
+        if (ep->timer_running) {
+            hrtimer_cancel(&ep->vblank_timer);
+            ep->timer_running = false;
+        }
 
         spin_lock_irqsave(&evdi->ddev->event_lock, flags);
 
@@ -218,9 +302,10 @@ void evdi_modeset_cleanup(struct drm_device *dev)
             crtc->state->event = NULL;
         }
 
-        if (evdi->pending_event[i]) {
-            drm_crtc_send_vblank_event(crtc, evdi->pending_event[i]);
-            evdi->pending_event[i] = NULL;
+        if (ep->pending_event) {
+            drm_crtc_send_vblank_event(crtc, ep->pending_event);
+            ep->pending_event = NULL;
+            ep->flipped = false;
         }
 
         spin_unlock_irqrestore(&evdi->ddev->event_lock, flags);

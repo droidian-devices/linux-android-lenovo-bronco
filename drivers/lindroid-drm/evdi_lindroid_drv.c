@@ -58,7 +58,7 @@ static const struct drm_ioctl_desc evdi_ioctls[] = {
 			 EVDI_IOCTL_FLAGS),
 	DRM_IOCTL_DEF_DRV(EVDI_GBM_DEL_BUFF, evdi_ioctl_gbm_del_buff,
 			 EVDI_IOCTL_FLAGS),
-	DRM_IOCTL_DEF_DRV(EVDI_VSYNC, evdi_ioctl_vsync,
+	DRM_IOCTL_DEF_DRV(EVDI_FLIPPED, evdi_ioctl_flipped,
 			DRM_RENDER_ALLOW),
 };
 

@@ -995,29 +995,20 @@ int evdi_queue_create_event(struct evdi_device *evdi,
 	return evdi_queue_create_event_with_id(evdi, params, owner, poll_id);
 }
 
-int evdi_ioctl_vsync(struct drm_device *dev,
+int evdi_ioctl_flipped(struct drm_device *dev,
                      void *data,
                      struct drm_file *file)
 {
     struct evdi_device *evdi = dev->dev_private;
-    struct drm_evdi_vsync *vs = data;
-    struct drm_crtc *crtc;
-    unsigned long flags;
-    int slot;
+    struct drm_evdi_flipped *vs = data;
+    struct evdi_pipe *ep;
 
-    slot = vs->display_id;
-    if (slot >= LINDROID_MAX_CONNECTORS)
+    if (vs->display_id >= LINDROID_MAX_CONNECTORS)
         return -EINVAL;
 
-    crtc = &evdi->pipe[slot].crtc;
-    drm_crtc_handle_vblank(crtc);
+    ep = &evdi->pipe[vs->display_id];
 
-    if (evdi->pending_event[slot]) {
-    	spin_lock_irqsave(&dev->event_lock, flags);
-		drm_crtc_send_vblank_event(crtc, evdi->pending_event[slot]);
-		evdi->pending_event[slot] = NULL;
-		spin_unlock_irqrestore(&dev->event_lock, flags);
-    }
+    smp_store_release(&ep->flipped, true);
 
     return 0;
 }

@@ -273,11 +273,22 @@ struct evdi_file_priv {
 	u8 swap_rr;
 };
 
+struct evdi_pipe {
+    struct drm_simple_display_pipe base;
+
+    struct hrtimer vblank_timer;
+    ktime_t period;
+    ktime_t next_vblank;
+    bool timer_running;
+    bool flipped;
+
+    struct drm_pending_vblank_event *pending_event;
+};
+
 struct evdi_device {
 	struct drm_device *ddev;
 	struct drm_connector *connector[LINDROID_MAX_CONNECTORS];
-	struct drm_simple_display_pipe pipe[LINDROID_MAX_CONNECTORS];
-	struct drm_pending_vblank_event *pending_event[LINDROID_MAX_CONNECTORS];
+	struct evdi_pipe pipe[LINDROID_MAX_CONNECTORS];
 
 	int dev_index;
 
@@ -351,6 +362,7 @@ void evdi_device_cleanup(struct evdi_device *evdi);
 /* evdi_modeset.c */
 int evdi_modeset_init(struct drm_device *dev);
 void evdi_modeset_cleanup(struct drm_device *dev);
+enum hrtimer_restart evdi_vblank_timer_func(struct hrtimer *t);
 
 /* evdi_connector.c */
 int evdi_connector_init(struct drm_device *dev, struct evdi_device *evdi);
@@ -369,7 +381,7 @@ int evdi_ioctl_gbm_get_buff(struct drm_device *dev, void *data, struct drm_file 
 int evdi_ioctl_gbm_del_buff(struct drm_device *dev, void *data, struct drm_file *file);
 int evdi_queue_swap_event(struct evdi_device *evdi, int id, int display_id, struct drm_file *owner);
 int evdi_queue_destroy_event(struct evdi_device *evdi, int id, struct drm_file *owner);
-int evdi_ioctl_vsync(struct drm_device *dev, void *data, struct drm_file *file);
+int evdi_ioctl_flipped(struct drm_device *dev, void *data, struct drm_file *file);
 int evdi_ioctl_cursor_set(struct drm_device *dev, void *data, struct drm_file *file);
 int evdi_ioctl_cursor_move(struct drm_device *dev, void *data, struct drm_file *file);
 

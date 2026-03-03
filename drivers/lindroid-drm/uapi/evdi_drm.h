@@ -80,11 +80,8 @@ struct drm_evdi_gbm_del_buff {
 	int id;
 };
 
-#define EVDI_VSYNC_HAS_FRAME   (1 << 0)
-struct drm_evdi_vsync {
+struct drm_evdi_flipped {
     __u32 display_id;
-    __s64 timestamp_ns;
-    __u32 flags;
 };
 
 #define DRM_EVDI_CONNECT                    0x00
@@ -98,7 +95,7 @@ struct drm_evdi_vsync {
 #define DRM_EVDI_GBM_DEL_BUFF               0x0B  /* Unused by create-disp */
 #define DRM_EVDI_GBM_CREATE_BUFF            0x0C  /* Unused by create-disp */
 #define DRM_EVDI_GBM_CREATE_BUFF_CALLBACK   0x0D
-#define DRM_EVDI_VSYNC						0x0E
+#define DRM_EVDI_FLIPPED					0x0E
 
 #define DRM_IOCTL_EVDI_CONNECT DRM_IOWR(DRM_COMMAND_BASE + \
 	DRM_EVDI_CONNECT, struct drm_evdi_connect)
@@ -124,7 +121,7 @@ struct drm_evdi_vsync {
 #define DRM_IOCTL_EVDI_GBM_DEL_BUFF DRM_IOWR(DRM_COMMAND_BASE + \
 	DRM_EVDI_GBM_DEL_BUFF, struct drm_evdi_gbm_del_buff)
 
-#define DRM_IOCTL_EVDI_VSYNC DRM_IOW(DRM_COMMAND_BASE + \
-	DRM_EVDI_VSYNC, struct drm_evdi_vsync)
+#define DRM_IOCTL_EVDI_FLIPPED DRM_IOW(DRM_COMMAND_BASE + \
+	DRM_EVDI_FLIPPED, struct drm_evdi_flipped)
 
 #endif /* __UAPI_EVDI_DRM_H__ */
