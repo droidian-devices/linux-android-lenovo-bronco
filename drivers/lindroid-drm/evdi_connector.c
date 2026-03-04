@@ -15,7 +15,7 @@
 #include <drm/drm_modes.h>
 
 int evdi_connector_slot(const struct evdi_device *evdi,
-						const struct drm_connector *conn)
+			const struct drm_connector *conn)
 {
 	int i;
 	for (i = 0; i < LINDROID_MAX_CONNECTORS; i++) {
@@ -39,9 +39,8 @@ evdi_connector_detect(struct drm_connector *connector, bool force)
 	if (unlikely(id < 0))
 		return connector_status_disconnected;
 
-	return evdi_likely_connected(evdi, id) ?
-	   connector_status_connected :
-	   connector_status_disconnected;
+	return evdi_likely_connected(evdi, id) ? connector_status_connected :
+						 connector_status_disconnected;
 }
 
 static int evdi_connector_get_modes(struct drm_connector *connector)
@@ -69,22 +68,23 @@ static int evdi_connector_get_modes(struct drm_connector *connector)
 	mode->vsync_end = mode->vsync_start + 1;
 	mode->vtotal = mode->vsync_end + 1;
 
-	mode->clock = mode->htotal * mode->vtotal * evdi->displays[id].refresh_rate / 1000;
+	mode->clock = mode->htotal * mode->vtotal *
+		      evdi->displays[id].refresh_rate / 1000;
 
 	mode->type = DRM_MODE_TYPE_PREFERRED | DRM_MODE_TYPE_DRIVER;
 
 	drm_mode_set_name(mode);
 	drm_mode_probed_add(connector, mode);
 
-	evdi_debug("Created mode %ux%u@%uHz for device %d",
-		  evdi->width, evdi->height, evdi->refresh_rate, evdi->dev_index);
+	evdi_debug("Created mode %ux%u@%uHz for device %d", evdi->width,
+		   evdi->height, evdi->refresh_rate, evdi->dev_index);
 
 	return 1;
 }
 
 static enum drm_mode_status
 evdi_connector_mode_valid(struct drm_connector *connector,
-			 struct drm_display_mode *mode)
+			  struct drm_display_mode *mode)
 {
 	int vrefresh = drm_mode_vrefresh(mode);
 	if (mode->hdisplay < 640 || mode->hdisplay > 8192)
@@ -194,13 +194,15 @@ int evdi_connector_init(struct drm_device *dev, struct evdi_device *evdi)
 #if EVDI_HAVE_CONNECTOR_INIT_WITH_DDC
 		ret = drm_connector_init_with_ddc(dev, connector,
 						  &evdi_connector_funcs,
-						  DRM_MODE_CONNECTOR_VIRTUAL, NULL);
+						  DRM_MODE_CONNECTOR_VIRTUAL,
+						  NULL);
 #else
 		ret = drm_connector_init(dev, connector, &evdi_connector_funcs,
 					 DRM_MODE_CONNECTOR_VIRTUAL);
 #endif
 		if (ret) {
-			evdi_err("Failed to initialize connector[%d]: %d", i, ret);
+			evdi_err("Failed to initialize connector[%d]: %d", i,
+				 ret);
 			kfree(connector);
 			goto err_free_prev;
 		}
@@ -209,7 +211,8 @@ int evdi_connector_init(struct drm_device *dev, struct evdi_device *evdi)
 		connector->doublescan_allowed = false;
 		connector->polled = DRM_CONNECTOR_POLL_CONNECT |
 				    DRM_CONNECTOR_POLL_DISCONNECT;
-		drm_connector_helper_add(connector, &evdi_connector_helper_funcs);
+		drm_connector_helper_add(connector,
+					 &evdi_connector_helper_funcs);
 		evdi->connector[i] = connector;
 	}
 

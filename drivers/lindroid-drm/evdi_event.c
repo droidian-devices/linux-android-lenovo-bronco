@@ -15,55 +15,40 @@
 #include <linux/jiffies.h>
 #include <linux/uaccess.h>
 
-struct evdi_event_pool global_event_pool = {0};
-static void evdi_inflight_req_release(struct kref *kref);
-void evdi_event_free_immediate(struct evdi_event *event);
-
+struct evdi_event_pool global_event_pool = { 0 };
 DEFINE_STATIC_KEY_FALSE(evdi_perf_key);
 bool evdi_perf_on;
 struct evdi_perf_counters evdi_perf;
 
-static DEFINE_PER_CPU(int, evdi_inflight_last_slot);
-
-static void *evdi_inflight_req_pool_alloc(gfp_t gfp_mask, void *pool_data)
+static inline void *evdi_mempool_kvzalloc(gfp_t gfp_mask, void *pool_data)
 {
-	return kvzalloc(sizeof(struct evdi_inflight_req), gfp_mask);
+	return kvzalloc((size_t)pool_data, gfp_mask);
 }
 
-static void evdi_inflight_req_pool_free(void *element, void *pool_data)
+static inline void evdi_mempool_kvfree(void *element, void *pool_data)
 {
 	kvfree(element);
 }
 
-static void *evdi_gralloc_data_alloc(gfp_t gfp_mask, void *pool_data)
+static inline void evdi_kmem_cache_destroy(struct kmem_cache **cache)
 {
-	struct evdi_gralloc_data *gralloc;
-	
-	gralloc = kvzalloc(sizeof(struct evdi_gralloc_data), gfp_mask);
-
-	return gralloc;
+	if (*cache) {
+		kmem_cache_destroy(*cache);
+		*cache = NULL;
+	}
 }
 
-static void evdi_gralloc_data_free(void *element, void *pool_data)
+static inline mempool_t *evdi_mempool_create(size_t min, size_t elem_size)
 {
-	kvfree(element);
+	return mempool_create(min, evdi_mempool_kvzalloc, evdi_mempool_kvfree,
+			      (void *)elem_size);
 }
 
-static void evdi_event_destroy_caches(void)
+static inline struct kmem_cache *evdi_event_cache(enum poll_event_type type)
 {
-	int i;
-
-	if (global_event_pool.cache) {
-		kmem_cache_destroy(global_event_pool.cache);
-		global_event_pool.cache = NULL;
-	}
-
-	for (i = 0; i < EVDI_EVENT_TYPE_MAX; i++) {
-		if (global_event_pool.type_cache[i]) {
-			kmem_cache_destroy(global_event_pool.type_cache[i]);
-			global_event_pool.type_cache[i] = NULL;
-		}
-	}
+	if (type >= 0 && type < EVDI_EVENT_TYPE_MAX)
+		return global_event_pool.type_cache[type];
+	return global_event_pool.cache;
 }
 
 int evdi_event_system_init(void)
@@ -71,247 +56,188 @@ int evdi_event_system_init(void)
 	char name[32];
 	int i;
 
-	global_event_pool.cache = kmem_cache_create("evdi_events",
-						   sizeof(struct evdi_event),
-						   0, SLAB_HWCACHE_ALIGN,
-						   NULL);
+	global_event_pool.cache =
+		kmem_cache_create("evdi_events", sizeof(struct evdi_event), 0,
+				  SLAB_HWCACHE_ALIGN, NULL);
 	if (!global_event_pool.cache)
 		return -ENOMEM;
 
 	for (i = 0; i < EVDI_EVENT_TYPE_MAX; i++) {
 		snprintf(name, sizeof(name), "evdi_events_%d", i);
 		global_event_pool.type_cache[i] =
-			kmem_cache_create(name, sizeof(struct evdi_event),
-					  0, SLAB_HWCACHE_ALIGN, NULL);
-		if (!global_event_pool.type_cache[i]) {
-			evdi_event_destroy_caches();
-			return -ENOMEM;
-		}
+			kmem_cache_create(name, sizeof(struct evdi_event), 0,
+					  SLAB_HWCACHE_ALIGN, NULL);
+		if (!global_event_pool.type_cache[i])
+			goto err_cache;
 	}
 
 	memset(&evdi_perf, 0, sizeof(evdi_perf));
 	evdi_perf_on = false;
 	evdi_smp_wmb();
 
-	global_event_pool.inflight_pool = mempool_create(
-		EVDI_INFLIGHT_POOL_MIN,
-		evdi_inflight_req_pool_alloc,
-		evdi_inflight_req_pool_free,
-		NULL);
-	if (!global_event_pool.inflight_pool)
-		goto err;
+	global_event_pool.inflight_pool = evdi_mempool_create(
+		EVDI_INFLIGHT_POOL_MIN, sizeof(struct evdi_inflight_req));
+	global_event_pool.gralloc_data_pool = evdi_mempool_create(
+		EVDI_GRALLOC_DATA_POOL_MIN, sizeof(struct evdi_gralloc_data));
 
-	global_event_pool.gralloc_data_pool = mempool_create(
-		EVDI_GRALLOC_DATA_POOL_MIN,
-		evdi_gralloc_data_alloc,
-		evdi_gralloc_data_free,
-		NULL);
-	if (!global_event_pool.gralloc_data_pool)
-		goto err;
+	if (!global_event_pool.inflight_pool ||
+	    !global_event_pool.gralloc_data_pool)
+		goto err_pool;
 
 	evdi_info("Event system initialized");
-
-	/* Pre-warm caches */
-	{
-		const int prealloc = 64;
-		int i;
-		void *tmp;
-		for (i = 0; i < prealloc; i++) {
-			tmp = kmem_cache_alloc(global_event_pool.cache, GFP_NOWAIT);
-			if (!tmp)
-				break;
-			kmem_cache_free(global_event_pool.cache, tmp);
-		}
-	}
-
 	return 0;
 
-err:
-	if (global_event_pool.gralloc_data_pool) {
+err_pool:
+	if (global_event_pool.gralloc_data_pool)
 		mempool_destroy(global_event_pool.gralloc_data_pool);
-		global_event_pool.gralloc_data_pool = NULL;
-	}
-	if (global_event_pool.inflight_pool) {
+	if (global_event_pool.inflight_pool)
 		mempool_destroy(global_event_pool.inflight_pool);
-		global_event_pool.inflight_pool = NULL;
-	}
-	evdi_event_destroy_caches();
+err_cache:
+	for (i = 0; i < EVDI_EVENT_TYPE_MAX; i++)
+		evdi_kmem_cache_destroy(&global_event_pool.type_cache[i]);
+	evdi_kmem_cache_destroy(&global_event_pool.cache);
 	return -ENOMEM;
 }
 
 void evdi_event_system_cleanup(void)
 {
-	if (global_event_pool.gralloc_data_pool)
-		mempool_destroy(global_event_pool.gralloc_data_pool);
+	int i;
+	mempool_destroy(global_event_pool.gralloc_data_pool);
+	mempool_destroy(global_event_pool.inflight_pool);
 
-	if (global_event_pool.inflight_pool)
-		mempool_destroy(global_event_pool.inflight_pool);
-
-	evdi_event_destroy_caches();
+	for (i = 0; i < EVDI_EVENT_TYPE_MAX; i++)
+		evdi_kmem_cache_destroy(&global_event_pool.type_cache[i]);
+	evdi_kmem_cache_destroy(&global_event_pool.cache);
 
 	evdi_debug("Event system cleaned up");
 }
 
 int evdi_event_init(struct evdi_device *evdi)
 {
-	int i;
-
-	if (unlikely(!evdi))
-		return -EINVAL;
-
-	evdi->percpu_inflight = alloc_percpu(struct evdi_percpu_inflight);
-	if (!evdi->percpu_inflight) {
-		evdi_err("Failed to allocate per-CPU inflight buffers");
-		return -ENOMEM;
-	}
-
 	spin_lock_init(&evdi->events.lock);
 	init_waitqueue_head(&evdi->events.wait_queue);
+	INIT_LIST_HEAD(&evdi->events.high_prio);
+	INIT_LIST_HEAD(&evdi->events.normal);
 	atomic_set(&evdi->events.cleanup_in_progress, 0);
-
-	evdi->events.head = NULL;
-	evdi->events.tail = NULL;
 	atomic_set(&evdi->events.queue_size, 0);
 	atomic_set(&evdi->events.next_poll_id, 1);
 	atomic_set(&evdi->events.stopping, 0);
-
-	init_llist_head(&evdi->events.lockfree_head);
-
+	atomic_set(&evdi->events.wake_pending, 0);
 	atomic64_set(&evdi->events.events_queued, 0);
 	atomic64_set(&evdi->events.events_dequeued, 0);
-	atomic_set(&evdi->events.wake_pending, 0);
 
 	evdi_smp_wmb();
-
 	evdi_debug("Event system initialized for device %d", evdi->dev_index);
 	return 0;
 }
 
 void evdi_event_cleanup(struct evdi_device *evdi)
 {
-	struct evdi_event *event, *next;
-	int i;
-
-	if (unlikely(!evdi))
-		return;
+	struct evdi_event *event, *tmp;
 
 	atomic_set(&evdi->events.cleanup_in_progress, 1);
 	atomic_set(&evdi->events.stopping, 1);
-
 	evdi_smp_wmb();
-
-	if (evdi->percpu_inflight) {
-		free_percpu(evdi->percpu_inflight);
-		evdi->percpu_inflight = NULL;
-	}
-
 	wake_up_all(&evdi->events.wait_queue);
 
 	spin_lock(&evdi->events.lock);
-	event = READ_ONCE(evdi->events.head);
-	WRITE_ONCE(evdi->events.head, NULL);
-	WRITE_ONCE(evdi->events.tail, NULL);
-	atomic_set(&evdi->events.queue_size, 0);
-	atomic_set(&evdi->events.wake_pending, 0);
-	spin_unlock(&evdi->events.lock);
 
-	while (event) {
-		next = READ_ONCE(event->next);
+	list_for_each_entry_safe (event, tmp, &evdi->events.high_prio, node) {
+		list_del(&event->node);
 		evdi_event_free(event);
-		event = next;
+		atomic_dec(&evdi->events.queue_size);
 	}
 
-	atomic_set(&evdi->events.cleanup_in_progress, 0);
+	list_for_each_entry_safe (event, tmp, &evdi->events.normal, node) {
+		list_del(&event->node);
+		evdi_event_free(event);
+		atomic_dec(&evdi->events.queue_size);
+	}
 
+	spin_unlock(&evdi->events.lock);
+
+	atomic_set(&evdi->events.cleanup_in_progress, 0);
 	evdi_debug("Event system cleaned up for device %d", evdi->dev_index);
 }
 
 struct evdi_event *evdi_event_alloc(struct evdi_device *evdi,
-				   enum poll_event_type type,
-				   int poll_id,
-				   void *data,
-				   size_t data_size,
-				   struct drm_file *owner)
+				    enum poll_event_type type, int poll_id,
+				    void *data, size_t data_size,
+				    struct drm_file *owner)
 {
 	struct evdi_event *event;
-	struct kmem_cache *cache = NULL;
-	u8 idx = 0xff;
-
-	if (type >= 0 && type < EVDI_EVENT_TYPE_MAX)
-		cache = global_event_pool.type_cache[type];
-
-	if (!cache)
-		cache = global_event_pool.cache;
+	struct kmem_cache *cache = evdi_event_cache(type);
 
 	event = kmem_cache_alloc(cache, GFP_ATOMIC);
-	if (unlikely(!event))
+	if (!event)
 		return NULL;
 
-	if (cache != global_event_pool.cache && type >= 0 &&
-	    type < EVDI_EVENT_TYPE_MAX)
-		idx = (u8)type;
-
-	EVDI_PERF_INC64(&evdi_perf.allocs);
 	event->from_pool = true;
-	event->cache_idx = idx;
-
+	event->cache_idx = (cache != global_event_pool.cache) ? type : 0xff;
 	event->type = type;
 	event->poll_id = poll_id;
-	event->payload_size = 0;
-	if (data && data_size > 0) {
-		size_t copy_size = (data_size > EVDI_EVENT_PAYLOAD_MAX) ?
-			EVDI_EVENT_PAYLOAD_MAX : data_size;
-		if (unlikely(copy_size > EVDI_EVENT_PAYLOAD_MAX)) {
-			evdi_warn("Event payload truncated %zu->%d bytes",
-				data_size, EVDI_EVENT_PAYLOAD_MAX);
-		}
-		memcpy(event->payload, data, copy_size);
-		event->payload_size = copy_size;
-	}
+	event->payload_size = min(data_size, (size_t)EVDI_EVENT_PAYLOAD_MAX);
+
+	if (data && data_size)
+		memcpy(event->payload, data, event->payload_size);
+
 	event->next = NULL;
 	event->owner = owner;
 	event->evdi = evdi;
 	atomic_set(&event->freed, 0);
 
+	EVDI_PERF_INC64(&evdi_perf.allocs);
 	return event;
+}
+
+void evdi_event_free_immediate(struct evdi_event *event)
+{
+	if (!event)
+		return;
+
+	if (likely(event->from_pool)) {
+		struct kmem_cache *cache =
+			(event->cache_idx < EVDI_EVENT_TYPE_MAX) ?
+				global_event_pool.type_cache[event->cache_idx] :
+				global_event_pool.cache;
+		kmem_cache_free(cache, event);
+	} else {
+		kfree(event);
+	}
+}
+
+static void evdi_event_free_rcu_cb(struct rcu_head *head)
+{
+	struct evdi_event *event = container_of(head, struct evdi_event, rcu);
+	evdi_event_free_immediate(event);
+}
+
+void evdi_event_free(struct evdi_event *event)
+{
+	if (!event || atomic_xchg(&event->freed, 1))
+		return;
+	call_rcu(&event->rcu, evdi_event_free_rcu_cb);
 }
 
 void evdi_inflight_req_get(struct evdi_inflight_req *req)
 {
-	if (unlikely(!req))
-		return;
-
-	kref_get(&req->refcount);
-}
-
-void evdi_inflight_req_put(struct evdi_inflight_req *req)
-{
-	if (unlikely(!req))
-		return;
-
-	kref_put(&req->refcount, evdi_inflight_req_release);
+	if (likely(req))
+		kref_get(&req->refcount);
 }
 
 static void evdi_inflight_req_release(struct kref *kref)
 {
 	struct evdi_inflight_req *req =
 		container_of(kref, struct evdi_inflight_req, refcount);
-	struct evdi_percpu_inflight *percpu_req;
-	struct evdi_gralloc_data *gralloc;
-	int i, nfd, slot;
+	int i;
 
 	if (atomic_xchg(&req->freed, 1))
 		return;
 
-	gralloc = req->reply.get_buf.gralloc_buf.gralloc;
-	if (gralloc) {
-		nfd = gralloc->numFds;
-		if (nfd < 0)
-			nfd = 0;
-		else if (nfd > EVDI_MAX_FDS)
-			nfd = EVDI_MAX_FDS;
-
-		for (i = 0; i < nfd; i++) {
+	if (req->reply.get_buf.gralloc_buf.gralloc) {
+		struct evdi_gralloc_data *gralloc =
+			req->reply.get_buf.gralloc_buf.gralloc;
+		for (i = 0; i < min(gralloc->numFds, EVDI_MAX_FDS); i++) {
 			if (gralloc->data_files[i]) {
 				fput(gralloc->data_files[i]);
 				gralloc->data_files[i] = NULL;
@@ -320,345 +246,92 @@ static void evdi_inflight_req_release(struct kref *kref)
 		mempool_free(gralloc, global_event_pool.gralloc_data_pool);
 		req->reply.get_buf.gralloc_buf.gralloc = NULL;
 	}
-	if (atomic_read(&req->from_percpu)) {
-		slot = (int)req->percpu_slot;
-		if (slot >= 0 && slot < 2) {
-			percpu_req = container_of(req, struct evdi_percpu_inflight, req[0]);
-			atomic_set(&percpu_req->in_use[slot], 0);
-			evdi_smp_wmb();
-		}
-	} else {
-		mempool_free(req, global_event_pool.inflight_pool);
-	}
+
+	mempool_free(req, global_event_pool.inflight_pool);
+}
+
+void evdi_inflight_req_put(struct evdi_inflight_req *req)
+{
+	if (likely(req))
+		kref_put(&req->refcount, evdi_inflight_req_release);
 }
 
 struct evdi_inflight_req *evdi_inflight_req_alloc(struct evdi_device *evdi)
 {
-	struct evdi_inflight_req *req = NULL;
-	bool from_percpu = false;
-	int sel_slot = -1;
-	struct evdi_percpu_inflight *pc;
-	int start, i;
-
-	if (likely(evdi && evdi->percpu_inflight)) {
-		pc = get_cpu_ptr(evdi->percpu_inflight);
-		start = this_cpu_read(evdi_inflight_last_slot) & 1;
-
-		prefetchw(&pc->req[0]);
-		prefetchw(&pc->req[1]);
-		for (i = 0; i < 2; i++) {
-			int s = (start + i) & 1;
-			if (atomic_cmpxchg(&pc->in_use[s], 0, 1) == 0) {
-				this_cpu_write(evdi_inflight_last_slot, s);
-				req = &pc->req[s];
-				from_percpu = true;
-				sel_slot = s;
-				break;
-			}
-		}
-		put_cpu_ptr(evdi->percpu_inflight);
-	}
-
-	if (unlikely(!req)) {
-		req = mempool_alloc(global_event_pool.inflight_pool, GFP_ATOMIC);
-		if (unlikely(!req))
-			return NULL;
-	}
+	struct evdi_inflight_req *req =
+		mempool_alloc(global_event_pool.inflight_pool, GFP_ATOMIC);
+	if (!req)
+		return NULL;
 
 	memset(req, 0, sizeof(*req));
 	kref_init(&req->refcount);
 	init_completion(&req->done);
-	if (from_percpu) {
-		atomic_set(&req->from_percpu, 1);
-		req->percpu_slot = sel_slot;
-	} else {
-		atomic_set(&req->from_percpu, 0);
-		req->percpu_slot = -1;
-	}
 	atomic_set(&req->freed, 0);
 
 	return req;
 }
 
-void evdi_event_free_immediate(struct evdi_event *event)
+static inline bool evdi_event_enqueue(struct evdi_device *evdi,
+				      struct evdi_event *event)
 {
-	struct kmem_cache *cache = NULL;
+	bool wake = false;
 
-	if (!event)
-		return;
-
-	if (likely(event->from_pool)) {
-		if (event->cache_idx < EVDI_EVENT_TYPE_MAX)
-			cache = global_event_pool.type_cache[event->cache_idx];
-
-		if (!cache)
-			cache = global_event_pool.cache;
-
-		kmem_cache_free(cache, event);
-	} else {
-		kfree(event);
+	if (unlikely(atomic_read(&evdi->events.cleanup_in_progress) ||
+		     atomic_read(&evdi->events.stopping))) {
+		evdi_event_free(event);
+		return false;
 	}
-}
 
-void evdi_event_free_rcu(struct rcu_head *head)
-{
-	struct evdi_event *event = container_of(head, struct evdi_event, rcu);
+	spin_lock(&evdi->events.lock);
+	if (event->type == swap_to)
+		list_add_tail(&event->node, &evdi->events.high_prio);
+	else
+		list_add_tail(&event->node, &evdi->events.normal);
 
-	evdi_event_free_immediate(event);
-}
+	atomic_inc(&evdi->events.queue_size);
+	wake = true;
+	spin_unlock(&evdi->events.lock);
 
-void evdi_event_free(struct evdi_event *event)
-{
-	if (!event)
-		return;
-
-	if (atomic_xchg(&event->freed, 1))
-		return;
-
-	call_rcu(&event->rcu, evdi_event_free_rcu);
-}
-
-static inline bool evdi_event_queue_lockfree(struct evdi_device *evdi, struct evdi_event *event)
-{
-	bool first;
-
-	if (unlikely(atomic_read_acquire(&evdi->events.cleanup_in_progress)))
-		return false;
-
-	if (unlikely(atomic_read_acquire(&evdi->events.stopping)))
-		return false;
-
-	prefetchw(&event->llist);
-	llist_add(&event->llist, &evdi->events.lockfree_head);
-
-	first = evdi_events_inc_and_test_first(evdi);
-	atomic64_inc(&evdi->events.events_queued);
-	EVDI_PERF_INC64(&evdi_perf.event_queue_ops);
-	
-	evdi_smp_wmb();
-
-	if (likely(first))
-		evdi_wakeup_pollers(evdi);
+	if (wake) {
+		atomic64_inc(&evdi->events.events_queued);
+		EVDI_PERF_INC64(&evdi_perf.event_queue_ops);
+		wake_up_interruptible(&evdi->events.wait_queue);
+	}
 
 	return true;
 }
 
 void evdi_event_queue(struct evdi_device *evdi, struct evdi_event *event)
 {
-	struct evdi_event *tail;
-	bool first;
-
-	if (unlikely(!evdi || !event))
-		return;
-
-	if (likely(evdi_event_queue_lockfree(evdi, event)))
-		return;
-
-	spin_lock(&evdi->events.lock);
-
-	if (unlikely(atomic_read(&evdi->events.stopping))) {
-		spin_unlock(&evdi->events.lock);
-		evdi_event_free(event);
-		return;
-	}
-	WRITE_ONCE(event->next, NULL);
-	evdi_smp_wmb();
-	tail = READ_ONCE(evdi->events.tail);
-	if (tail)
-		WRITE_ONCE(tail->next, event);
-	else
-		WRITE_ONCE(evdi->events.head, event);
-
-	WRITE_ONCE(evdi->events.tail, event);
-	spin_unlock(&evdi->events.lock);
-
-	first = evdi_events_inc_and_test_first(evdi);
-	atomic64_inc(&evdi->events.events_queued);
-	EVDI_PERF_INC64(&evdi_perf.event_queue_ops);
-	if (likely(first))
-		evdi_wakeup_pollers(evdi);
-}
-
-static inline struct evdi_event *evdi_event_pop_head_locked(struct evdi_device *evdi)
-{
-	struct evdi_event *e = evdi->events.head;
-	if (e) {
-		WRITE_ONCE(evdi->events.head, e->next);
-		if (!evdi->events.head)
-			WRITE_ONCE(evdi->events.tail, NULL);
-	}
-	return e;
-}
-
-static inline void evdi_event_drain_lockfree(struct evdi_device *evdi)
-{
-	struct llist_node *lst, *node;
-	struct evdi_event *first = NULL, *last = NULL;
-
-	lst = llist_del_all(&evdi->events.lockfree_head);
-	if (!lst)
-		return;
-
-	lst = llist_reverse_order(lst);
-	for (node = lst; node; node = node->next) {
-		struct evdi_event *e = llist_entry(node, struct evdi_event, llist);
-		e->next = NULL;
-		if (!first)
-			first = e;
-		else
-			last->next = e;
-
-		last = e;
-	}
-
-	if (!first)
-		return;
-
-	spin_lock(&evdi->events.lock);
-	if (!evdi->events.head) {
-		WRITE_ONCE(evdi->events.head, first);
-		WRITE_ONCE(evdi->events.tail, last);
-	} else {
-		WRITE_ONCE(evdi->events.tail->next, first);
-		WRITE_ONCE(evdi->events.tail, last);
-	}
-	spin_unlock(&evdi->events.lock);
+	if (evdi && event)
+		evdi_event_enqueue(evdi, event);
 }
 
 struct evdi_event *evdi_event_dequeue(struct evdi_device *evdi)
 {
 	struct evdi_event *event = NULL;
-	bool empty;
 
- 	if (unlikely(!evdi))
- 		return NULL;
-
-	if (unlikely(atomic_read_acquire(&evdi->events.cleanup_in_progress))) {
-		spin_lock(&evdi->events.lock);
-		event = evdi_event_pop_head_locked(evdi);
-		spin_unlock(&evdi->events.lock);
-		if (!event)
-			return NULL;
-		goto found_one;
-	}
-
-	if (READ_ONCE(evdi->events.head)) {
-		spin_lock(&evdi->events.lock);
-		event = evdi_event_pop_head_locked(evdi);
-		spin_unlock(&evdi->events.lock);
-		if (event)
-			goto found_one;
-	}
-
-	evdi_event_drain_lockfree(evdi);
 	spin_lock(&evdi->events.lock);
-	event = evdi_event_pop_head_locked(evdi);
-	spin_unlock(&evdi->events.lock);
-	if (!event)
-		return NULL;
+	if (!list_empty(&evdi->events.high_prio)) {
+		event = list_first_entry(&evdi->events.high_prio,
+					 struct evdi_event, node);
+		list_del(&event->node);
+	} else if (!list_empty(&evdi->events.normal)) {
+		event = list_first_entry(&evdi->events.normal,
+					 struct evdi_event, node);
+		list_del(&event->node);
+	}
 
-found_one:
-	prefetch(&event->payload[0]);
-	empty = evdi_events_dec_and_test_empty(evdi);
-	atomic64_inc(&evdi->events.events_dequeued);
-	EVDI_PERF_INC64(&evdi_perf.event_dequeue_ops);
-	if (likely(empty))
-		atomic_set(&evdi->events.wake_pending, 0);
-	evdi_smp_wmb();
+	if (event)
+		atomic_dec(&evdi->events.queue_size);
+	spin_unlock(&evdi->events.lock);
+
+	if (event) {
+		atomic64_inc(&evdi->events.events_dequeued);
+		EVDI_PERF_INC64(&evdi_perf.event_dequeue_ops);
+	}
+
 	return event;
-}
-
-
-void evdi_event_cleanup_file(struct evdi_device *evdi, struct drm_file *file)
-{
-	struct evdi_event *event, *next;
-	struct evdi_event *new_head = NULL, *new_tail = NULL;
-	struct evdi_event **restore_events = NULL;
-	struct llist_node *llnode, *next_node = NULL;
-	int lf_removed = 0;
-	int sp_removed = 0;
-	int restore_count = 0;
-	int restore_capacity = 0;
-	int i, d, queue_estimate;
-
-	if (unlikely(!evdi || !file))
-		return;
-
-	if (atomic_read(&evdi->events.queue_size) == 0 &&
-	    llist_empty(&evdi->events.lockfree_head))
-		return;
-
-	atomic_set(&evdi->events.cleanup_in_progress, 1);
-
-	queue_estimate = atomic_read(&evdi->events.queue_size);
-
-	if (queue_estimate > 0) {
-		restore_capacity = queue_estimate + 64;
-		restore_events = kmalloc_array(restore_capacity,
-					sizeof(struct evdi_event *), GFP_KERNEL);
-	}
-
-	llnode = llist_del_all(&evdi->events.lockfree_head);
-
-	while (llnode) {
-		event = llist_entry(llnode, struct evdi_event, llist);
-		next_node = llnode->next;
-
-		if (event->owner == file) {
-			lf_removed++;
-			atomic_dec(&evdi->events.queue_size);
-			call_rcu(&event->rcu, evdi_event_free_rcu);
-		} else if (restore_events && restore_count < restore_capacity) {
-			restore_events[restore_count++] = event;
-		}
-		llnode = next_node;
-	}
-	if (restore_events) {
-		for (i = 0; i < restore_count; i++) {
-			llist_add(&restore_events[i]->llist, &evdi->events.lockfree_head);
-		}
-		kfree(restore_events);
-	}
-	evdi_smp_wmb();
-
-	spin_lock(&evdi->events.lock);
-
-	event = READ_ONCE(evdi->events.head);
-	while (event) {
-		next = READ_ONCE(event->next);
-		if (event->owner == file) {
-			sp_removed++;
-			call_rcu(&event->rcu, evdi_event_free_rcu);
-		} else {
-			WRITE_ONCE(event->next, NULL);
-			if (!new_head) {
-				new_head = event;
-				new_tail = event;
-			} else {
-				WRITE_ONCE(new_tail->next, event);
-				new_tail = event;
-			}
-		}
-		event = next;
-	}
-	
-	WRITE_ONCE(evdi->events.head, new_head);
-	WRITE_ONCE(evdi->events.tail, new_tail);
-	if (sp_removed)
-		atomic_sub(sp_removed, &evdi->events.queue_size);
-
-	spin_unlock(&evdi->events.lock);
-
-	atomic_set(&evdi->events.cleanup_in_progress, 0);
-	evdi_smp_wmb();
-	if (atomic_read(&evdi->events.queue_size) == 0)
-		atomic_set(&evdi->events.wake_pending, 0);
-
-	wake_up_interruptible(&evdi->events.wait_queue);
-	
-	if (lf_removed || sp_removed)
-		evdi_debug("Cleaned up %d events for closed file (lf:%d sp:%d)",
-			   lf_removed + sp_removed, lf_removed, sp_removed);
 }
 
 int evdi_event_wait(struct evdi_device *evdi, struct drm_file *file)
@@ -669,34 +342,55 @@ int evdi_event_wait(struct evdi_device *evdi, struct drm_file *file)
 	EVDI_PERF_INC64(&evdi_perf.poll_cycles);
 
 	for (;;) {
-		prepare_to_wait(&evdi->events.wait_queue, &wait, TASK_INTERRUPTIBLE);
+		prepare_to_wait(&evdi->events.wait_queue, &wait,
+				TASK_INTERRUPTIBLE);
 
-		if (atomic_read_acquire(&evdi->events.wake_pending)) {
-#ifdef EVDI_HAVE_ATOMIC_CMPXCHG_RELAXED
-			atomic_xchg_relaxed(&evdi->events.wake_pending, 0);
-#else
-			atomic_set(&evdi->events.wake_pending, 0);
-#endif
-		}
-
-		evdi_smp_mb();
-		if (atomic_read(&evdi->events.queue_size) > 0) {
-			ret = 0;
+		if (atomic_read(&evdi->events.queue_size) > 0)
 			break;
-		}
-
 		if (atomic_read(&evdi->events.stopping)) {
 			ret = -ENODEV;
 			break;
 		}
-
 		if (signal_pending(current)) {
 			ret = -ERESTARTSYS;
 			break;
 		}
+
 		schedule();
 	}
-	finish_wait(&evdi->events.wait_queue, &wait);
 
+	finish_wait(&evdi->events.wait_queue, &wait);
 	return ret;
+}
+
+void evdi_event_cleanup_file(struct evdi_device *evdi, struct drm_file *file)
+{
+	struct evdi_event *event, *tmp;
+
+	if (!evdi || !file)
+		return;
+
+	atomic_set(&evdi->events.cleanup_in_progress, 1);
+
+	spin_lock(&evdi->events.lock);
+	list_for_each_entry_safe (event, tmp, &evdi->events.high_prio, node) {
+		if (event->owner == file) {
+			list_del(&event->node);
+			call_rcu(&event->rcu, evdi_event_free_rcu_cb);
+			atomic_dec(&evdi->events.queue_size);
+		}
+	}
+
+	list_for_each_entry_safe (event, tmp, &evdi->events.normal, node) {
+		if (event->owner == file) {
+			list_del(&event->node);
+			call_rcu(&event->rcu, evdi_event_free_rcu_cb);
+			atomic_dec(&evdi->events.queue_size);
+		}
+	}
+	spin_unlock(&evdi->events.lock);
+
+	atomic_set(&evdi->events.cleanup_in_progress, 0);
+	evdi_smp_wmb();
+	wake_up_interruptible(&evdi->events.wait_queue);
 }
