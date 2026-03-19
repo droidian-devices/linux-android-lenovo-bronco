@@ -44,6 +44,13 @@ struct drm_evdi_poll {
 	void *data;
 };
 
+struct drm_evdi_get_fd {
+	int display_id;
+	int buffer_id;
+    int num_fds;
+    int fds[4];
+};
+
 struct drm_evdi_get_buff_callabck {
 	int poll_id;
 	int version;
@@ -88,7 +95,7 @@ struct drm_evdi_flipped {
 #define DRM_EVDI_GRABPIX 0x02 /* Unused by create-disp */
 #define DRM_EVDI_ENABLE_CURSOR_EVENTS 0x03 /* Unused by create-disp */
 #define DRM_EVDI_POLL 0x04
-#define DRM_EVDI_GBM_ADD_BUFF 0x05 /* Unused by create-disp */
+#define DRM_EVDI_GET_FD 0x05 /* Unused by create-disp */
 #define DRM_EVDI_GBM_GET_BUFF 0x06 /* Unused by create-disp */
 #define DRM_EVDI_GET_BUFF_CALLBACK 0x08
 #define DRM_EVDI_DESTROY_BUFF_CALLBACK 0x09
@@ -102,6 +109,9 @@ struct drm_evdi_flipped {
 
 #define DRM_IOCTL_EVDI_POLL                                                    \
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_EVDI_POLL, struct drm_evdi_poll)
+
+#define DRM_IOCTL_EVDI_GET_FD                                                   \
+	DRM_IOWR(DRM_COMMAND_BASE + DRM_EVDI_GET_FD, struct drm_evdi_get_fd)
 
 #define DRM_IOCTL_EVDI_GBM_GET_BUFF                                            \
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_EVDI_GBM_GET_BUFF,                     \

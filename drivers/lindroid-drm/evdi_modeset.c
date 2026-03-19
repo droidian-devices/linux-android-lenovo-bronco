@@ -144,11 +144,21 @@ static void evdi_pipe_update(struct drm_simple_display_pipe *pipe,
 	struct evdi_framebuffer *efb;
 	struct evdi_pipe *ep = container_of(pipe, struct evdi_pipe, base);
 	int slot;
+	struct drm_framebuffer *old_fb;
 
 	if (!state || !fb)
 		return;
 
 	slot = evdi_connector_slot(evdi, pipe->connector);
+
+	spin_lock(&evdi->fb_lock);
+	old_fb = evdi->active_fb[slot];
+	if (old_fb)
+		drm_framebuffer_put(old_fb);
+
+	drm_framebuffer_get(fb);
+	evdi->active_fb[slot] = fb;
+	spin_unlock(&evdi->fb_lock);
 
 	if (crtc->state && crtc->state->event) {
 		spin_lock(&evdi->ddev->event_lock);

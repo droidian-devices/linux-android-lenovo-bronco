@@ -212,7 +212,10 @@ struct evdi_gem_object {
 	struct file* dmabuf_file;
 };
 
-#define to_evdi_bo(x) container_of(x, struct evdi_gem_object, base)
+static inline struct evdi_gem_object *to_evdi_gem(struct drm_gem_object *obj)
+{
+	return container_of(obj, struct evdi_gem_object, base);
+}
 
 struct evdi_swap {
 	int id;
@@ -258,6 +261,7 @@ struct evdi_device {
 	struct drm_device *ddev;
 	struct drm_connector *connector[LINDROID_MAX_CONNECTORS];
 	struct evdi_pipe pipe[LINDROID_MAX_CONNECTORS];
+	struct drm_framebuffer *active_fb[LINDROID_MAX_CONNECTORS];
 
 	int dev_index;
 
@@ -289,10 +293,13 @@ struct evdi_device {
 
 	struct platform_device *pdev;
 
+	atomic_t buf_id_counter;
+	
 	struct idr file_idr;
 	spinlock_t file_lock;
 	struct idr inflight_idr;
 	spinlock_t inflight_lock;
+	spinlock_t fb_lock;
 };
 
 struct evdi_inflight_req;
@@ -316,29 +323,22 @@ int evdi_connector_init(struct drm_device *dev, struct evdi_device *evdi);
 void evdi_connector_cleanup(struct evdi_device *evdi);
 
 /* evdi_ioctl.c */
+struct evdi_memfd_hdr {
+	int id;
+	int version;
+	int num_fds;
+	int num_ints;
+};
+
 int evdi_ioctl_connect(struct drm_device *dev, void *data,
 		       struct drm_file *file);
 int evdi_ioctl_poll(struct drm_device *dev, void *data, struct drm_file *file);
-int evdi_ioctl_get_buff_callback(struct drm_device *dev, void *data,
-				 struct drm_file *file);
-int evdi_ioctl_destroy_buff_callback(struct drm_device *dev, void *data,
-				     struct drm_file *file);
-int evdi_ioctl_create_buff_callback(struct drm_device *dev, void *data,
-				    struct drm_file *file);
-int evdi_ioctl_gbm_create_buff(struct drm_device *dev, void *data,
-			       struct drm_file *file);
+int evdi_ioctl_get_evdi_get_fd(struct drm_device *dev, void *data,
+			    struct drm_file *file);
 void evdi_inflight_discard_owner(struct evdi_device *evdi,
 				 struct drm_file *owner);
-int evdi_ioctl_request_update(struct drm_device *dev, void *data,
-			      struct drm_file *file);
-int evdi_ioctl_gbm_get_buff(struct drm_device *dev, void *data,
-			    struct drm_file *file);
-int evdi_ioctl_gbm_del_buff(struct drm_device *dev, void *data,
-			    struct drm_file *file);
 int evdi_queue_swap_event(struct evdi_device *evdi, int id, int display_id,
 			  struct drm_file *owner);
-int evdi_queue_destroy_event(struct evdi_device *evdi, int id,
-			     struct drm_file *owner);
 int evdi_ioctl_flipped(struct drm_device *dev, void *data,
 		       struct drm_file *file);
 int evdi_ioctl_cursor_set(struct drm_device *dev, void *data,
@@ -366,7 +366,6 @@ int evdi_prime_handle_to_fd(struct drm_device *dev, struct drm_file *file_priv,
 			    uint32_t handle, uint32_t flags, int *prime_fd);
 int evdi_prime_fd_to_handle(struct drm_device *dev, struct drm_file *file_priv,
 			    int prime_fd, uint32_t *handle);
-
 /* evdi_sysfs.c */
 int evdi_sysfs_init(void);
 void evdi_sysfs_cleanup(void);
@@ -383,6 +382,8 @@ struct evdi_framebuffer {
 	bool active;
 	int gralloc_buf_id;
 	struct drm_file *owner;
+	struct drm_gem_object *gem_objs[4];
+	uint32_t gem_count;
 };
 
 /* evdi_connector.c */

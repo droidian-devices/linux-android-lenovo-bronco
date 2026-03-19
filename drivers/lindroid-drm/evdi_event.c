@@ -77,19 +77,14 @@ int evdi_event_system_init(void)
 
 	global_event_pool.inflight_pool = evdi_mempool_create(
 		EVDI_INFLIGHT_POOL_MIN, sizeof(struct evdi_inflight_req));
-	global_event_pool.gralloc_data_pool = evdi_mempool_create(
-		EVDI_GRALLOC_DATA_POOL_MIN, sizeof(struct evdi_gralloc_data));
 
-	if (!global_event_pool.inflight_pool ||
-	    !global_event_pool.gralloc_data_pool)
+	if (!global_event_pool.inflight_pool)
 		goto err_pool;
 
 	evdi_info("Event system initialized");
 	return 0;
 
 err_pool:
-	if (global_event_pool.gralloc_data_pool)
-		mempool_destroy(global_event_pool.gralloc_data_pool);
 	if (global_event_pool.inflight_pool)
 		mempool_destroy(global_event_pool.inflight_pool);
 err_cache:
@@ -102,7 +97,6 @@ err_cache:
 void evdi_event_system_cleanup(void)
 {
 	int i;
-	mempool_destroy(global_event_pool.gralloc_data_pool);
 	mempool_destroy(global_event_pool.inflight_pool);
 
 	for (i = 0; i < EVDI_EVENT_TYPE_MAX; i++)
@@ -233,19 +227,6 @@ static void evdi_inflight_req_release(struct kref *kref)
 
 	if (atomic_xchg(&req->freed, 1))
 		return;
-
-	if (req->reply.get_buf.gralloc_buf.gralloc) {
-		struct evdi_gralloc_data *gralloc =
-			req->reply.get_buf.gralloc_buf.gralloc;
-		for (i = 0; i < min(gralloc->numFds, EVDI_MAX_FDS); i++) {
-			if (gralloc->data_files[i]) {
-				fput(gralloc->data_files[i]);
-				gralloc->data_files[i] = NULL;
-			}
-		}
-		mempool_free(gralloc, global_event_pool.gralloc_data_pool);
-		req->reply.get_buf.gralloc_buf.gralloc = NULL;
-	}
 
 	mempool_free(req, global_event_pool.inflight_pool);
 }

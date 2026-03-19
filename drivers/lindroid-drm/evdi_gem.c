@@ -55,29 +55,6 @@ static int evdi_export_id_as_fd(int id, uint32_t flags, int *out_fd)
 	return 0;
 }
 
-static int evdi_read_id_from_fd(int fd_u32, int *out_id)
-{
-	struct file *memfd_file;
-	loff_t pos = 0;
-	ssize_t rd;
-	int id;
-
-	if (!out_id || fd_u32 <= 0 || fd_u32 > INT_MAX)
-		return -EINVAL;
-
-	memfd_file = fget(fd_u32);
-	if (!memfd_file)
-		return -EINVAL;
-
-	rd = kernel_read(memfd_file, &id, sizeof(id), &pos);
-	fput(memfd_file);
-	if (rd != sizeof(id))
-		return -EINVAL;
-
-	*out_id = id;
-	return 0;
-}
-
 int evdi_prime_handle_to_fd(struct drm_device *dev, struct drm_file *file_priv,
 			    uint32_t handle, uint32_t flags, int *prime_fd)
 {
@@ -87,14 +64,42 @@ int evdi_prime_handle_to_fd(struct drm_device *dev, struct drm_file *file_priv,
 int evdi_prime_fd_to_handle(struct drm_device *dev, struct drm_file *file_priv,
 			    int prime_fd, uint32_t *handle)
 {
-	int id, ret;
-	if (!handle)
+	struct evdi_gem_object *obj;
+	struct file *dmabuf_file;
+	int ret;
+
+	if (!handle || prime_fd < 0)
 		return -EINVAL;
 
-	ret = evdi_read_id_from_fd(prime_fd, &id);
-	if (ret)
-		return ret;
+	dmabuf_file = fget(prime_fd);
+	if (!dmabuf_file) {
+		return -EBADF;
+	}
 
-	*handle = (uint32_t)id;
+	obj = kzalloc(sizeof(*obj), GFP_KERNEL);
+	if (!obj) {
+		fput(dmabuf_file);
+		return -ENOMEM;
+	}
+
+	ret = drm_gem_object_init(dev, &obj->base, PAGE_SIZE);
+	if (ret) {
+		kfree(obj);
+		fput(dmabuf_file);
+		return ret;
+	}
+
+	obj->dmabuf_file = dmabuf_file;
+
+	ret = drm_gem_handle_create(file_priv, &obj->base, handle);
+	if (ret) {
+		drm_gem_object_release(&obj->base);
+		kfree(obj);
+		fput(dmabuf_file);
+		return ret;
+	}
+
+	drm_gem_object_put(&obj->base);
+
 	return 0;
 }

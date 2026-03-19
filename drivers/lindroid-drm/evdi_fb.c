@@ -19,6 +19,10 @@
 static void evdi_fb_destroy(struct drm_framebuffer *fb)
 {
 	struct evdi_framebuffer *efb = to_evdi_fb(fb);
+	int i;
+	
+	for (i = 0; i < efb->gem_count; i++)
+		drm_gem_object_put(efb->gem_objs[i]);
 
 	drm_framebuffer_cleanup(fb);
 	kfree(efb);
@@ -89,22 +93,45 @@ struct drm_framebuffer *
 evdi_fb_user_fb_create(struct drm_device *dev, struct drm_file *file,
 		       const struct drm_mode_fb_cmd2 *mode_cmd)
 {
+	struct evdi_device *evdi = dev->dev_private;
 	struct evdi_framebuffer *efb;
-	int ret;
+	struct drm_gem_object *gem_obj;
+	int i, ret;
 
 	efb = kzalloc(sizeof(*efb), GFP_KERNEL);
 	if (!efb)
 		return ERR_PTR(-ENOMEM);
 
-	efb->owner = file;
-	efb->active = true;
-	efb->gralloc_buf_id = mode_cmd->handles[0];
+	for (i = 0; i < 4; i++) {
+		if (mode_cmd->handles[i] == 0)
+			continue;
 
-	ret = evdi_fb_init_core(dev, efb, mode_cmd);
-	if (ret) {
-		kfree(efb);
-		return ERR_PTR(ret);
+		gem_obj = drm_gem_object_lookup(file, mode_cmd->handles[i]);
+		if (!gem_obj) {
+			evdi_err("GEM lookup failed for handle %u",
+				 mode_cmd->handles[i]);
+			ret = -ENOENT;
+			goto err;
+		}
+		efb->gem_objs[i] = gem_obj;
+		efb->gem_count++;
 	}
 
+	efb->owner = file;
+	efb->active = true;
+	efb->gralloc_buf_id = atomic_inc_return(&evdi->buf_id_counter);
+
+	ret = evdi_fb_init_core(dev, efb, mode_cmd);
+	if (ret)
+		goto err;
+
 	return &efb->base;
+
+err:
+	for (i = 0; i < efb->gem_count; i++) {
+		if (efb->gem_objs[i])
+			drm_gem_object_put(efb->gem_objs[i]);
+	}
+	kfree(efb);
+	return ERR_PTR(ret);
 }

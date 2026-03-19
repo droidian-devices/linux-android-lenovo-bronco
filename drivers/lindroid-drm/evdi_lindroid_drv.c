@@ -45,18 +45,7 @@ static const struct file_operations evdi_fops = {
 static const struct drm_ioctl_desc evdi_ioctls[] = {
 	DRM_IOCTL_DEF_DRV(EVDI_CONNECT, evdi_ioctl_connect, EVDI_IOCTL_FLAGS),
 	DRM_IOCTL_DEF_DRV(EVDI_POLL, evdi_ioctl_poll, EVDI_IOCTL_FLAGS),
-	DRM_IOCTL_DEF_DRV(EVDI_GBM_CREATE_BUFF, evdi_ioctl_gbm_create_buff,
-			  EVDI_IOCTL_FLAGS),
-	DRM_IOCTL_DEF_DRV(EVDI_GBM_GET_BUFF, evdi_ioctl_gbm_get_buff,
-			  EVDI_IOCTL_FLAGS),
-	DRM_IOCTL_DEF_DRV(EVDI_GET_BUFF_CALLBACK, evdi_ioctl_get_buff_callback,
-			  EVDI_IOCTL_FLAGS),
-	DRM_IOCTL_DEF_DRV(EVDI_DESTROY_BUFF_CALLBACK,
-			  evdi_ioctl_destroy_buff_callback, EVDI_IOCTL_FLAGS),
-	DRM_IOCTL_DEF_DRV(EVDI_GBM_CREATE_BUFF_CALLBACK,
-			  evdi_ioctl_create_buff_callback, EVDI_IOCTL_FLAGS),
-	DRM_IOCTL_DEF_DRV(EVDI_GBM_DEL_BUFF, evdi_ioctl_gbm_del_buff,
-			  EVDI_IOCTL_FLAGS),
+	DRM_IOCTL_DEF_DRV(EVDI_GET_FD, evdi_ioctl_get_evdi_get_fd, EVDI_IOCTL_FLAGS),
 	DRM_IOCTL_DEF_DRV(EVDI_FLIPPED, evdi_ioctl_flipped, DRM_RENDER_ALLOW),
 };
 
@@ -272,6 +261,7 @@ static int evdi_platform_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, evdi);
 
+	atomic_set(&evdi->buf_id_counter, 0);
 	evdi_info("Platform device probed successfully, DRM device registered");
 	return 0;
 
