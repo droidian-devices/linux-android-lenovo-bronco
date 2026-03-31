@@ -20,13 +20,6 @@
 #include <linux/sched/signal.h>
 #include <linux/errno.h>
 
-enum evdi_buffer_op { EVDI_BUF_TRACK, EVDI_BUF_UNTRACK };
-
-struct evdi_gralloc_buf_stack {
-	struct evdi_gralloc_buf_user buf;
-	int installed_fds[EVDI_MAX_FDS];
-};
-
 static int evdi_queue_event(struct evdi_device *evdi, enum poll_event_type type,
 			    const void *payload, size_t payload_size,
 			    struct drm_file *owner, int poll_id)
@@ -49,105 +42,6 @@ static inline int evdi_queue_event_autoid(struct evdi_device *evdi,
 	int poll_id = atomic_inc_return(&evdi->events.next_poll_id);
 	return evdi_queue_event(evdi, type, payload, payload_size, owner,
 				poll_id);
-}
-
-static struct evdi_inflight_req *evdi_inflight_take(struct evdi_device *evdi,
-						    int id)
-{
-	struct evdi_inflight_req *req;
-
-	spin_lock(&evdi->inflight_lock);
-	req = idr_remove(&evdi->inflight_idr, id);
-	spin_unlock(&evdi->inflight_lock);
-
-	return req;
-}
-
-static int evdi_wait_req(struct evdi_inflight_req *req)
-{
-	long ret = wait_for_completion_interruptible_timeout(&req->done,
-							     EVDI_WAIT_TIMEOUT);
-	if (ret <= 0)
-		return ret ? (int)ret : -ETIMEDOUT;
-	return 0;
-}
-
-static inline void evdi_inflight_cancel(struct evdi_device *evdi,
-					struct evdi_inflight_req *req,
-					int poll_id)
-{
-	struct evdi_inflight_req *tmp = evdi_inflight_take(evdi, poll_id);
-	if (tmp)
-		evdi_inflight_req_put(tmp);
-	evdi_inflight_req_put(req);
-}
-
-static inline struct evdi_inflight_req *
-evdi_inflight_alloc(struct evdi_device *evdi, struct drm_file *owner, int type,
-		    int *out_id)
-{
-	int id;
-	struct evdi_inflight_req *req;
-
-	req = evdi_inflight_req_alloc(evdi);
-	if (!req)
-		return NULL;
-
-	req->type = type;
-	req->owner = owner;
-
-	idr_preload(GFP_KERNEL);
-	spin_lock(&evdi->inflight_lock);
-	id = idr_alloc(&evdi->inflight_idr, req, 1, EVDI_MAX_INFLIGHT_REQUESTS,
-		       GFP_NOWAIT);
-	spin_unlock(&evdi->inflight_lock);
-	idr_preload_end();
-
-	if (id < 0) {
-		evdi_inflight_req_put(req);
-		return NULL;
-	}
-
-	evdi_inflight_req_get(req);
-	*out_id = id;
-	return req;
-}
-
-void evdi_inflight_discard_owner(struct evdi_device *evdi,
-				 struct drm_file *owner)
-{
-	struct evdi_inflight_req *req;
-	struct evdi_inflight_req *batch[16];
-	int nr, i, id = 0;
-
-	if (unlikely(!evdi || !owner))
-		return;
-
-	{
-		do {
-			nr = 0;
-
-			spin_lock(&evdi->inflight_lock);
-			while (nr < ARRAY_SIZE(batch)) {
-				req = idr_get_next(&evdi->inflight_idr, &id);
-				if (!req)
-					break;
-
-				if (req->owner == owner) {
-					idr_remove(&evdi->inflight_idr, id);
-					batch[nr++] = req;
-				}
-				id++;
-			}
-			spin_unlock(&evdi->inflight_lock);
-
-			for (i = 0; i < nr; i++) {
-				complete_all(&batch[i]->done);
-				evdi_inflight_req_put(batch[i]);
-				cond_resched();
-			}
-		} while (nr == ARRAY_SIZE(batch));
-	}
 }
 
 static inline size_t evdi_event_serialize_payload(struct evdi_event *e,
@@ -241,7 +135,7 @@ int evdi_ioctl_poll(struct drm_device *dev, void *data, struct drm_file *file)
 
 	event = evdi_event_dequeue(evdi);
 	if (!event) {
-		ret = evdi_event_wait(evdi, file);
+		ret = evdi_event_wait(evdi);
 		if (ret)
 			return ret;
 
@@ -332,20 +226,6 @@ int evdi_ioctl_get_evdi_get_fd(struct drm_device *dev, void *data,
 	}
 
 	return 0;
-}
-
-static inline bool evdi_file_valid(struct drm_file *file,
-				   struct evdi_file_priv **priv_out)
-{
-	if (!file || !file->driver_priv)
-		return false;
-	*priv_out = file->driver_priv;
-	return true;
-}
-
-static inline int evdi_copy_user_val(void __user *u_ptr, void *val, size_t size)
-{
-	return u_ptr ? copy_to_user(u_ptr, val, size) ? -EFAULT : 0 : 0;
 }
 
 int evdi_queue_swap_event(struct evdi_device *evdi, int id, int display_id,

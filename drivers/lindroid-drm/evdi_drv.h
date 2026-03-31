@@ -126,9 +126,6 @@
 
 #define EVDI_MAX_FDS 32
 #define EVDI_MAX_INTS 128
-#define EVDI_GRALLOC_POOL_MIN 32
-#define EVDI_INFLIGHT_POOL_MIN 64
-#define EVDI_GRALLOC_DATA_POOL_MIN 32
 
 #define EVDI_EVENT_PAYLOAD_MAX 32
 
@@ -142,23 +139,13 @@
 
 struct evdi_device;
 
-struct evdi_gralloc_buf_user {
-	int version;
-	int numFds;
-	int numInts;
-	int data[EVDI_MAX_FDS + EVDI_MAX_INTS];
-};
-
 /* Must be +1 poll event types */
 #define EVDI_EVENT_TYPE_MAX 6
 
 struct evdi_event_pool {
 	struct kmem_cache *cache;
 	struct kmem_cache *drm_cache;
-	struct kmem_cache *inflight_cache;
 	struct kmem_cache *type_cache[EVDI_EVENT_TYPE_MAX];
-	mempool_t *inflight_pool;
-	mempool_t *gralloc_data_pool;
 };
 
 struct evdi_event {
@@ -174,37 +161,6 @@ struct evdi_event {
 	struct drm_file *owner;
 	struct evdi_device *evdi;
 	atomic_t freed;
-};
-
-struct evdi_inflight_req {
-	int type;
-	struct completion done;
-	struct drm_file *owner;
-	struct kref refcount;
-	atomic_t freed;
-	union {
-		struct {
-			int id;
-			u32 stride;
-		} create;
-		struct {
-			int status;
-			struct {
-				int version;
-				int numFds;
-				int numInts;
-				struct evdi_gralloc_data *gralloc;
-			} gralloc_buf;
-		} get_buf;
-	} reply;
-};
-
-struct evdi_gralloc_data {
-	int version;
-	int numFds;
-	int numInts;
-	struct file *data_files[EVDI_MAX_FDS];
-	int data_ints[EVDI_MAX_INTS];
 };
 
 struct evdi_gem_object {
@@ -282,7 +238,6 @@ struct evdi_device {
 		struct llist_head lockfree_head;
 		wait_queue_head_t wait_queue;
 		atomic_t wake_pending;
-		atomic_t queue_size;
 		atomic_t next_poll_id;
 		atomic_t stopping;
 		atomic64_t events_queued;
@@ -297,14 +252,9 @@ struct evdi_device {
 	
 	struct idr file_idr;
 	spinlock_t file_lock;
-	struct idr inflight_idr;
-	spinlock_t inflight_lock;
 	spinlock_t fb_lock;
 };
 
-struct evdi_inflight_req;
-void evdi_inflight_req_get(struct evdi_inflight_req *req);
-void evdi_inflight_req_put(struct evdi_inflight_req *req);
 
 extern struct evdi_event_pool global_event_pool;
 extern atomic_t evdi_device_count;
@@ -335,8 +285,6 @@ int evdi_ioctl_connect(struct drm_device *dev, void *data,
 int evdi_ioctl_poll(struct drm_device *dev, void *data, struct drm_file *file);
 int evdi_ioctl_get_evdi_get_fd(struct drm_device *dev, void *data,
 			    struct drm_file *file);
-void evdi_inflight_discard_owner(struct evdi_device *evdi,
-				 struct drm_file *owner);
 int evdi_queue_swap_event(struct evdi_device *evdi, int id, int display_id,
 			  struct drm_file *owner);
 int evdi_ioctl_flipped(struct drm_device *dev, void *data,
@@ -348,7 +296,6 @@ int evdi_ioctl_cursor_move(struct drm_device *dev, void *data,
 
 /* evdi_event.c */
 int evdi_event_init(struct evdi_device *evdi);
-void evdi_event_cleanup(struct evdi_device *evdi);
 struct evdi_event *evdi_event_alloc(struct evdi_device *evdi,
 				    enum poll_event_type type, int poll_id,
 				    void *data, size_t data_size,
@@ -357,9 +304,8 @@ void evdi_event_free(struct evdi_event *event);
 void evdi_event_queue(struct evdi_device *evdi, struct evdi_event *event);
 struct evdi_event *evdi_event_dequeue(struct evdi_device *evdi);
 void evdi_event_cleanup_file(struct evdi_device *evdi, struct drm_file *file);
-int evdi_event_wait(struct evdi_device *evdi, struct drm_file *file);
-struct evdi_inflight_req;
-struct evdi_inflight_req *evdi_inflight_req_alloc(struct evdi_device *evdi);
+int evdi_event_wait(struct evdi_device *evdi);
+void evdi_event_queue_reset(struct evdi_device *evdi);
 
 /* evdi_gem.c */
 int evdi_prime_handle_to_fd(struct drm_device *dev, struct drm_file *file_priv,
@@ -438,8 +384,6 @@ static __always_inline void evdi_smp_mb(void)
 #define EVDI_HAVE_CONNECTOR_INIT_WITH_DDC 0
 #endif
 
-#define EVDI_MAX_INFLIGHT_REQUESTS 1000
-
 /* Debug and statistics */
 #ifdef DEBUG
 #define evdi_debug(fmt, ...)                                                   \
@@ -483,54 +427,5 @@ struct evdi_perf_counters {
 };
 
 extern struct evdi_perf_counters evdi_perf;
-
-/* Queue wakeup helpers */
-static __always_inline bool
-evdi_events_inc_and_test_first(struct evdi_device *evdi)
-{
-	int qsz;
-
-	if (unlikely(!evdi))
-		return false;
-
-	qsz = atomic_inc_return(&evdi->events.queue_size);
-	return likely(qsz == 1);
-}
-
-static __always_inline bool
-evdi_events_dec_and_test_empty(struct evdi_device *evdi)
-{
-	int qsz;
-
-	if (unlikely(!evdi))
-		return false;
-
-	qsz = atomic_dec_return(&evdi->events.queue_size);
-	return likely(qsz == 0);
-}
-
-static __always_inline void evdi_wakeup_pollers(struct evdi_device *evdi)
-{
-	if (unlikely(!evdi))
-		return;
-
-	if (unlikely(atomic_read(&evdi->events.queue_size) <= 0))
-		return;
-
-	if (unlikely(!waitqueue_active(&evdi->events.wait_queue)))
-		return;
-
-#ifdef EVDI_HAVE_ATOMIC_CMPXCHG_RELAXED
-	if (atomic_cmpxchg_relaxed(&evdi->events.wake_pending, 0, 1) != 0)
-		return;
-#else
-	if (atomic_cmpxchg(&evdi->events.wake_pending, 0, 1) != 0)
-		return;
-#endif
-	evdi_smp_wmb();
-	if (likely(waitqueue_active(&evdi->events.wait_queue)))
-		wake_up_interruptible(&evdi->events.wait_queue);
-	EVDI_PERF_INC64(&evdi_perf.wakeup_count);
-}
 
 #endif /* __EVDI_DRV_H__ */

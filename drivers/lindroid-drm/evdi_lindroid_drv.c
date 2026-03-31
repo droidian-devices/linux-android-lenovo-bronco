@@ -16,8 +16,6 @@
 
 extern int evdi_event_system_init(void);
 extern void evdi_event_system_cleanup(void);
-extern void evdi_inflight_discard_owner(struct evdi_device *evdi,
-					struct drm_file *owner);
 
 atomic_t evdi_device_count = ATOMIC_INIT(0);
 
@@ -118,10 +116,6 @@ static void evdi_driver_postclose(struct drm_device *dev, struct drm_file *file)
 		WRITE_ONCE(evdi->drm_client, NULL);
 	}
 
-	evdi_smp_wmb();
-	evdi_inflight_discard_owner(evdi, file);
-	evdi_smp_mb();
-
 	evdi_event_cleanup_file(evdi, file);
 
 	if (priv) {
@@ -156,8 +150,6 @@ int evdi_device_init(struct evdi_device *evdi, struct platform_device *pdev)
 
 	idr_init(&evdi->file_idr);
 	spin_lock_init(&evdi->file_lock);
-	idr_init(&evdi->inflight_idr);
-	spin_lock_init(&evdi->inflight_lock);
 
 	evdi->pdev = pdev;
 
@@ -173,9 +165,8 @@ int evdi_device_init(struct evdi_device *evdi, struct platform_device *pdev)
 	return 0;
 
 err_cleanup_locks:
-	evdi_event_cleanup(evdi);
+	evdi_event_queue_reset(evdi);
 	idr_destroy(&evdi->file_idr);
-	idr_destroy(&evdi->inflight_idr);
 	mutex_destroy(&evdi->config_mutex);
 	return ret;
 }
@@ -192,26 +183,12 @@ void evdi_device_cleanup(struct evdi_device *evdi)
 
 	WRITE_ONCE(evdi->drm_client, NULL);
 
-	{
-		struct evdi_inflight_req *req;
-		int id;
-		spin_lock(&evdi->inflight_lock);
-		idr_for_each_entry (&evdi->inflight_idr, req, id) {
-			idr_remove(&evdi->inflight_idr, id);
-			complete_all(&req->done);
-			evdi_inflight_req_put(req);
-		}
-		spin_unlock(&evdi->inflight_lock);
-	}
-
 	evdi_smp_wmb();
 
 	evdi_debug("Cleaning up device %d", evdi->dev_index);
-
-	evdi_event_cleanup(evdi);
+	evdi_event_queue_reset(evdi);
 	evdi_smp_mb();
 	idr_destroy(&evdi->file_idr);
-	idr_destroy(&evdi->inflight_idr);
 	mutex_destroy(&evdi->config_mutex);
 
 	evdi_debug("Device %d cleaned up", evdi->dev_index);
