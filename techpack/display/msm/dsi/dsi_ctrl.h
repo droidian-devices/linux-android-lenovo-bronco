@@ -320,7 +320,6 @@ struct dsi_ctrl {
 	u32 cmd_success_frame;
 	u32 cmd_engine_refcount;
 	u32 pending_cmd_flags;
-	u32 refcount_non_zero;
 };
 
 /**

@@ -15,7 +15,6 @@
 #include "sde_dbg.h"
 #include "msm_drv.h"
 #include "sde_encoder.h"
-#include "dsi_display_mot_ext.h"
 
 #define to_dsi_bridge(x)     container_of((x), struct dsi_bridge, base)
 #define to_dsi_state(x)      container_of((x), struct dsi_connector_state, base)
@@ -36,7 +35,6 @@ static void convert_to_dsi_mode(const struct drm_display_mode *drm_mode,
 		struct dsi_display_mode *dsi_mode, struct dsi_display *display)
 {
 	bool fsc_mode = DSI_IS_FSC_PANEL(display->panel->fsc_rgb_order);
-	char *p_mode_group = NULL;
 
 	memset(dsi_mode, 0, sizeof(*dsi_mode));
 
@@ -65,14 +63,6 @@ static void convert_to_dsi_mode(const struct drm_display_mode *drm_mode,
 			!!(drm_mode->flags & DRM_MODE_FLAG_PHSYNC);
 	dsi_mode->timing.v_sync_polarity =
 			!!(drm_mode->flags & DRM_MODE_FLAG_PVSYNC);
-
-	// Motorola zhanggb, add refreshrate group, IKSWT-18219
-	// Check type/flags/name to set group
-	p_mode_group = strchr(drm_mode->name, '@');
-	if (p_mode_group && strlen(p_mode_group) > 1) {
-	    dsi_mode->timing.refresh_rate_group_flag= mot_atoi(++p_mode_group);
-	}
-
 }
 
 static void msm_parse_mode_priv_info(const struct msm_display_mode *msm_mode,
@@ -150,13 +140,7 @@ void dsi_convert_to_drm_mode(const struct dsi_display_mode *dsi_mode,
 		drm_mode->flags |= DRM_MODE_FLAG_PVSYNC;
 
 	/* set mode name */
-	// Motorola zhanggb, Add refreshrate group, IKSWT-18219
-	if (dsi_mode->timing.refresh_rate_group_flag)
-	    snprintf(drm_mode->name, DRM_DISPLAY_MODE_LEN, "%dx%dx%d%s@%d",
-			drm_mode->hdisplay, drm_mode->vdisplay,
-			drm_mode_vrefresh(drm_mode), panel_caps, dsi_mode->timing.refresh_rate_group_flag);
-	else
-	    snprintf(drm_mode->name, DRM_DISPLAY_MODE_LEN, "%dx%dx%d%s",
+	snprintf(drm_mode->name, DRM_DISPLAY_MODE_LEN, "%dx%dx%d%s",
 			drm_mode->hdisplay, drm_mode->vdisplay,
 			drm_mode_vrefresh(drm_mode), panel_caps);
 }
@@ -238,7 +222,7 @@ static void dsi_bridge_pre_enable(struct drm_bridge *bridge)
 		DSI_DEBUG("[%d] seamless pre-enable\n", c_bridge->id);
 		return;
 	}
-        pr_info("[drm] dsi_display_prepare start\n");
+
 	SDE_ATRACE_BEGIN("dsi_display_prepare");
 	rc = dsi_display_prepare(c_bridge->display);
 	if (rc) {
@@ -248,11 +232,8 @@ static void dsi_bridge_pre_enable(struct drm_bridge *bridge)
 		return;
 	}
 	SDE_ATRACE_END("dsi_display_prepare");
-	pr_info("[drm] dsi_display_prepare end\n");
 
 	SDE_ATRACE_BEGIN("dsi_display_enable");
-	pr_info("[drm] dsi_display_enable start\n");
-
 	rc = dsi_display_enable(c_bridge->display);
 	if (rc) {
 		DSI_ERR("[%d] DSI display enable failed, rc=%d\n",
@@ -260,7 +241,6 @@ static void dsi_bridge_pre_enable(struct drm_bridge *bridge)
 		(void)dsi_display_unprepare(c_bridge->display);
 	}
 	SDE_ATRACE_END("dsi_display_enable");
-	pr_info("[drm] dsi_display_enable end\n");
 
 	rc = dsi_display_splash_res_cleanup(c_bridge->display);
 	if (rc)
@@ -1195,7 +1175,6 @@ int dsi_connector_get_modes(struct drm_connector *connector, void *data,
 			/* set the first mode in device tree list as preferred */
 			m->type |= DRM_MODE_TYPE_PREFERRED;
 		}
-
 		drm_mode_probed_add(connector, m);
 	}
 

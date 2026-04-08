@@ -72,7 +72,7 @@ struct dp_aux_private {
 	atomic_t aborted;
 };
 
-#if 1 //def CONFIG_DYNAMIC_DEBUG
+#ifdef CONFIG_DYNAMIC_DEBUG
 static void dp_aux_hex_dump(struct drm_dp_aux *drm_aux,
 		struct drm_dp_aux_msg *msg)
 {
@@ -97,7 +97,7 @@ static void dp_aux_hex_dump(struct drm_dp_aux *drm_aux,
 			linebuf, sizeof(linebuf), false);
 
 		if (msg->size == 1 && msg->address == 0)
-			DP_INFO("%s%s\n", prefix, linebuf);
+			DP_DEBUG_V("%s%s\n", prefix, linebuf);
 		else
 			DP_AUX_DEBUG(dp_aux, "%s%s\n", prefix, linebuf);
 	}
@@ -540,12 +540,8 @@ static ssize_t dp_aux_transfer(struct drm_dp_aux *drm_aux,
 			aux->catalog->update_aux_cfg(aux->catalog,
 				aux->cfg, PHY_AUX_CFG1);
 		aux->catalog->reset(aux->catalog);
-		dp_aux_hex_dump(drm_aux, msg);
-		DP_WARN("%s need retry\n", __func__);
 		goto unlock_exit;
 	} else if (ret < 0) {
-		dp_aux_hex_dump(drm_aux, msg);
-		DP_WARN("%s ret < 0\n", __func__);
 		goto unlock_exit;
 	}
 
@@ -794,7 +790,6 @@ static int dp_aux_configure_aux_switch(struct dp_aux *dp_aux,
 
 	DP_AUX_DEBUG(dp_aux, "enable=%d, orientation=%d, event=%d\n",
 			enable, orientation, event);
-
 	if (gpio_is_valid(dp_aux->dp_aux_switch_flip_gpio)) {
 		bool switch_enable = false;
 		bool switch_flip = false;
@@ -813,8 +808,7 @@ static int dp_aux_configure_aux_switch(struct dp_aux *dp_aux,
 		DP_INFO("dp_aux_switch: en=%d, cc=%d, sw_en=%d, sw_flip=%d\n",
 				enable, orientation, switch_enable, switch_flip);
 	} else {
-		DP_INFO("%s: fsa4480 switch: en=%d, cc=%d, event=%d\n",
-				__func__, enable, orientation, event);
+		DP_INFO("%s: use fsa4480 for aux switch\n", __func__);
 		rc = fsa4480_switch_event(aux->aux_switch_node, event);
 		if (rc)
 			DP_AUX_ERR(dp_aux, "failed to configure fsa4480 i2c device (%d)\n", rc);

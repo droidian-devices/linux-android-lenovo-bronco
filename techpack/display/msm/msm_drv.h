@@ -237,12 +237,6 @@ enum msm_mdp_conn_property {
 	CONNECTOR_PROP_DSC_MODE,
 	CONNECTOR_PROP_WB_FSC_MODE,
 
-	/* MOT feature panel*/
-	CONNECTOR_PROP_HBM,
-	CONNECTOR_PROP_CABC,
-	CONNECTOR_PROP_ACL,
-	CONNECTOR_PROP_DC,
-	CONNECTOR_PROP_COLOR,
 	/* total # of properties */
 	CONNECTOR_PROP_COUNT
 };
@@ -420,28 +414,6 @@ struct msm_roi_caps {
 	bool merge_rois;
 	uint32_t num_roi;
 	struct msm_roi_alignment align;
-};
-
-enum msm_param_state {
-	PARAM_STATE_OFF = 0,
-	PARAM_STATE_ON,
-	PARAM_STATE_NUM,
-	PARAM_STATE_DISABLE = 0xFFFF,
-};
-
-enum msm_param_id {
-	PARAM_HBM_ID = 0,
-	PARAM_CABC_ID,
-	PARAM_ACL_ID,
-	PARAM_DC_ID,
-	PARAM_COLOR_ID,
-	PARAM_ID_NUM
-};
-
-struct msm_param_info {
-	enum msm_param_id param_idx;
-	enum msm_mdp_conn_property param_conn_idx;
-	int value;
 };
 
 /**
