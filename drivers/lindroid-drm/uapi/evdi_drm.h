@@ -23,7 +23,7 @@
 enum poll_event_type {
 	none = 0,
 	add_buf = 1,
-	get_buf = 2,
+	disp_pwr = 2,
 	destroy_buf = 3,
 	swap_to = 4,
 	create_buf = 5

@@ -31,8 +31,13 @@ static void evdi_pipe_enable(struct drm_simple_display_pipe *pipe,
 {
 	struct evdi_pipe *ep = container_of(pipe, struct evdi_pipe, base);
 	struct drm_display_mode *mode = &crtc_state->mode;
+	struct evdi_device *evdi = pipe->plane.dev->dev_private;
+	int slot;
 	u64 refresh_hz;
 	u64 period_ns;
+
+	slot = evdi_connector_slot(evdi, pipe->connector);
+	evdi_queue_power_event(evdi, slot, true);
 
 	drm_crtc_vblank_on(&pipe->crtc);
 
@@ -40,7 +45,6 @@ static void evdi_pipe_enable(struct drm_simple_display_pipe *pipe,
 	if (!refresh_hz)
 		refresh_hz = 60;
 
-	pr_info("REFRESHRATE: %d", refresh_hz);
 	period_ns = div_u64(1000000000ULL, refresh_hz);
 	ep->period = ns_to_ktime(period_ns);
 	ep->next_vblank = ktime_add(ktime_get(), ep->period);
@@ -55,8 +59,13 @@ static void evdi_pipe_enable(struct drm_simple_display_pipe *pipe,
 			     struct drm_crtc_state *crtc_state)
 {
 	struct evdi_pipe *ep = container_of(pipe, struct evdi_pipe, base);
+	struct evdi_device *evdi = pipe->plane.dev->dev_private;
+	int slot;
 	u64 refresh_hz;
 	u64 period_ns;
+
+	slot = evdi_connector_slot(evdi, pipe->connector);
+	evdi_queue_power_event(evdi, slot, true);
 
 	drm_crtc_vblank_on(&pipe->crtc);
 
@@ -102,6 +111,7 @@ static void evdi_pipe_disable(struct drm_simple_display_pipe *pipe)
 	struct evdi_pipe *ep = container_of(pipe, struct evdi_pipe, base);
 	struct evdi_device *evdi = pipe->plane.dev->dev_private;
 	struct drm_crtc *crtc = &pipe->crtc;
+	struct drm_plane *plane = &pipe->plane;
 	unsigned long flags;
 	int slot;
 
@@ -109,17 +119,11 @@ static void evdi_pipe_disable(struct drm_simple_display_pipe *pipe)
 
 	spin_lock_irqsave(&evdi->ddev->event_lock, flags);
 	if (crtc->state && crtc->state->event) {
-		evdi_debug(
-			"Completing CRTC state event during disable (slot %d)\n",
-			slot);
 		drm_crtc_send_vblank_event(crtc, crtc->state->event);
 		crtc->state->event = NULL;
 	}
 
 	if (ep->pending_event) {
-		evdi_debug(
-			"Completing pending_event during disable (slot %d)\n",
-			slot);
 		drm_crtc_send_vblank_event(crtc, ep->pending_event);
 		ep->pending_event = NULL;
 		ep->flipped = false;
@@ -127,11 +131,26 @@ static void evdi_pipe_disable(struct drm_simple_display_pipe *pipe)
 	spin_unlock_irqrestore(&evdi->ddev->event_lock, flags);
 
 	if (ep->timer_running) {
-		hrtimer_cancel(&ep->vblank_timer);
 		ep->timer_running = false;
+		hrtimer_cancel(&ep->vblank_timer);
 	}
 
 	drm_crtc_vblank_off(crtc);
+	evdi_queue_power_event(evdi, slot, false);
+
+	spin_lock(&evdi->fb_lock);
+	if (evdi->active_fb[slot]) {
+		struct drm_framebuffer *fb = evdi->active_fb[slot];
+		drm_framebuffer_put(fb);
+		evdi->active_fb[slot] = NULL;
+	}
+
+	if (plane->state && plane->state->fb) {
+		struct drm_framebuffer *fb = plane->state->fb;
+		drm_framebuffer_put(fb);
+		plane->state->fb = NULL;
+	}
+	spin_unlock(&evdi->fb_lock);
 }
 
 static void evdi_pipe_update(struct drm_simple_display_pipe *pipe,

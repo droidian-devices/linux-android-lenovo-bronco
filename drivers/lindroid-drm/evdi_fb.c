@@ -19,10 +19,13 @@
 static void evdi_fb_destroy(struct drm_framebuffer *fb)
 {
 	struct evdi_framebuffer *efb = to_evdi_fb(fb);
+	struct evdi_device *evdi = fb->dev->dev_private;
 	int i;
 	
 	for (i = 0; i < efb->gem_count; i++)
 		drm_gem_object_put(efb->gem_objs[i]);
+
+	evdi_queue_destroy_buf_event(evdi, efb->gralloc_buf_id, efb->owner);
 
 	drm_framebuffer_cleanup(fb);
 	kfree(efb);

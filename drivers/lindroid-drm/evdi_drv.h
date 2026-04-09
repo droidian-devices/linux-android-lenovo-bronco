@@ -178,6 +178,15 @@ struct evdi_swap {
 	int display_id;
 };
 
+struct evdi_destroy_buf {
+	int buff_id;
+};
+
+struct evdi_disp_power {
+	int display_id;
+	bool power_on;
+};
+
 /*
  * If any payload from future UAPI changes grows beyond the current 32 bytes,
  * Just double EVDI_EVENT_PAYLOAD_MAX to 64 bytes.
@@ -287,6 +296,10 @@ int evdi_ioctl_get_evdi_get_fd(struct drm_device *dev, void *data,
 			    struct drm_file *file);
 int evdi_queue_swap_event(struct evdi_device *evdi, int id, int display_id,
 			  struct drm_file *owner);
+int evdi_queue_destroy_buf_event(struct evdi_device *evdi, int buff_id,
+			  struct drm_file *owner);
+int evdi_queue_power_event(struct evdi_device *evdi, int display_id,
+			  bool pwr_on);
 int evdi_ioctl_flipped(struct drm_device *dev, void *data,
 		       struct drm_file *file);
 int evdi_ioctl_cursor_set(struct drm_device *dev, void *data,

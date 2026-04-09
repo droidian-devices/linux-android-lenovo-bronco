@@ -225,6 +225,8 @@ int evdi_ioctl_get_evdi_get_fd(struct drm_device *dev, void *data,
 		cmd->fds[i] = fd;
 	}
 
+	drm_framebuffer_put(fb);
+
 	return 0;
 }
 
@@ -250,6 +252,43 @@ int evdi_queue_swap_event(struct evdi_device *evdi, int id, int display_id,
 		return -ENOMEM;
 
 	EVDI_PERF_INC64(&evdi_perf.swap_updates);
+	return 0;
+}
+
+int evdi_queue_destroy_buf_event(struct evdi_device *evdi, int buff_id,
+			  struct drm_file *owner)
+{
+	struct drm_file *client;
+	struct evdi_destroy_buf dbuf;
+
+	if (atomic_read(&evdi->events.stopping))
+		return -ENODEV;
+
+	if ((client = READ_ONCE(evdi->drm_client)))
+		owner = client;
+
+	dbuf.buff_id = buff_id;
+
+	if (evdi_queue_event_autoid(evdi, destroy_buf, &dbuf, sizeof(dbuf), owner))
+		return -ENOMEM;
+
+	return 0;
+}
+
+int evdi_queue_power_event(struct evdi_device *evdi, int display_id,
+			  bool pwr_on)
+{
+	struct evdi_disp_power d_pwr;
+
+	if (display_id < 0 || display_id >= LINDROID_MAX_CONNECTORS)
+		return -EINVAL;
+	
+	d_pwr.display_id = display_id;
+	d_pwr.power_on = pwr_on;
+
+	if (evdi_queue_event_autoid(evdi, disp_pwr, &d_pwr, sizeof(d_pwr), NULL))
+		return -ENOMEM;
+
 	return 0;
 }
 
