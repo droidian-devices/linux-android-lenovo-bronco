@@ -43,7 +43,7 @@ static const struct file_operations evdi_fops = {
 static const struct drm_ioctl_desc evdi_ioctls[] = {
 	DRM_IOCTL_DEF_DRV(EVDI_CONNECT, evdi_ioctl_connect, EVDI_IOCTL_FLAGS),
 	DRM_IOCTL_DEF_DRV(EVDI_POLL, evdi_ioctl_poll, EVDI_IOCTL_FLAGS),
-	DRM_IOCTL_DEF_DRV(EVDI_GET_FD, evdi_ioctl_get_evdi_get_fd, EVDI_IOCTL_FLAGS),
+	DRM_IOCTL_DEF_DRV(EVDI_GET_FD, evdi_ioctl_get_fd, EVDI_IOCTL_FLAGS),
 	DRM_IOCTL_DEF_DRV(EVDI_FLIPPED, evdi_ioctl_flipped, DRM_RENDER_ALLOW),
 };
 

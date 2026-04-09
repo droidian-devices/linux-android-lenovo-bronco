@@ -161,8 +161,7 @@ int evdi_ioctl_poll(struct drm_device *dev, void *data, struct drm_file *file)
 	return 0;
 }
 
-int evdi_ioctl_get_evdi_get_fd(struct drm_device *dev, void *data,
-			    struct drm_file *file)
+int evdi_ioctl_get_fd(struct drm_device *dev, void *data, struct drm_file *file)
 {
 	struct evdi_device *evdi = dev->dev_private;
 	struct drm_evdi_get_fd *cmd = data;
@@ -196,7 +195,6 @@ int evdi_ioctl_get_evdi_get_fd(struct drm_device *dev, void *data,
 	cmd->num_fds = efb->gem_count;
 
 	for (i = 0; i < cmd->num_fds; i++) {
-
 		struct drm_gem_object *gem = efb->gem_objs[i];
 		struct file *f;
 		int fd;
@@ -256,7 +254,7 @@ int evdi_queue_swap_event(struct evdi_device *evdi, int id, int display_id,
 }
 
 int evdi_queue_destroy_buf_event(struct evdi_device *evdi, int buff_id,
-			  struct drm_file *owner)
+				 struct drm_file *owner)
 {
 	struct drm_file *client;
 	struct evdi_destroy_buf dbuf;
@@ -269,24 +267,26 @@ int evdi_queue_destroy_buf_event(struct evdi_device *evdi, int buff_id,
 
 	dbuf.buff_id = buff_id;
 
-	if (evdi_queue_event_autoid(evdi, destroy_buf, &dbuf, sizeof(dbuf), owner))
+	if (evdi_queue_event_autoid(evdi, destroy_buf, &dbuf, sizeof(dbuf),
+				    owner))
 		return -ENOMEM;
 
 	return 0;
 }
 
 int evdi_queue_power_event(struct evdi_device *evdi, int display_id,
-			  bool pwr_on)
+			   bool pwr_on)
 {
 	struct evdi_disp_power d_pwr;
 
 	if (display_id < 0 || display_id >= LINDROID_MAX_CONNECTORS)
 		return -EINVAL;
-	
+
 	d_pwr.display_id = display_id;
 	d_pwr.power_on = pwr_on;
 
-	if (evdi_queue_event_autoid(evdi, disp_pwr, &d_pwr, sizeof(d_pwr), NULL))
+	if (evdi_queue_event_autoid(evdi, disp_pwr, &d_pwr, sizeof(d_pwr),
+				    NULL))
 		return -ENOMEM;
 
 	return 0;

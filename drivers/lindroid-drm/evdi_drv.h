@@ -165,7 +165,7 @@ struct evdi_event {
 
 struct evdi_gem_object {
 	struct drm_gem_object base;
-	struct file* dmabuf_file;
+	struct file *dmabuf_file;
 };
 
 static inline struct evdi_gem_object *to_evdi_gem(struct drm_gem_object *obj)
@@ -191,10 +191,6 @@ struct evdi_disp_power {
  * If any payload from future UAPI changes grows beyond the current 32 bytes,
  * Just double EVDI_EVENT_PAYLOAD_MAX to 64 bytes.
  */
-EVDI_BUILD_BUG_ON(sizeof(struct drm_evdi_gbm_create_buff) >
-		  EVDI_EVENT_PAYLOAD_MAX);
-EVDI_BUILD_BUG_ON(sizeof(struct drm_evdi_gbm_get_buff) >
-		  EVDI_EVENT_PAYLOAD_MAX);
 EVDI_BUILD_BUG_ON(sizeof(struct evdi_swap) > EVDI_EVENT_PAYLOAD_MAX);
 EVDI_BUILD_BUG_ON(sizeof(int) > EVDI_EVENT_PAYLOAD_MAX);
 
@@ -258,12 +254,11 @@ struct evdi_device {
 	struct platform_device *pdev;
 
 	atomic_t buf_id_counter;
-	
+
 	struct idr file_idr;
 	spinlock_t file_lock;
 	spinlock_t fb_lock;
 };
-
 
 extern struct evdi_event_pool global_event_pool;
 extern atomic_t evdi_device_count;
@@ -282,24 +277,17 @@ int evdi_connector_init(struct drm_device *dev, struct evdi_device *evdi);
 void evdi_connector_cleanup(struct evdi_device *evdi);
 
 /* evdi_ioctl.c */
-struct evdi_memfd_hdr {
-	int id;
-	int version;
-	int num_fds;
-	int num_ints;
-};
-
 int evdi_ioctl_connect(struct drm_device *dev, void *data,
 		       struct drm_file *file);
 int evdi_ioctl_poll(struct drm_device *dev, void *data, struct drm_file *file);
-int evdi_ioctl_get_evdi_get_fd(struct drm_device *dev, void *data,
-			    struct drm_file *file);
+int evdi_ioctl_get_fd(struct drm_device *dev, void *data,
+		      struct drm_file *file);
 int evdi_queue_swap_event(struct evdi_device *evdi, int id, int display_id,
 			  struct drm_file *owner);
 int evdi_queue_destroy_buf_event(struct evdi_device *evdi, int buff_id,
-			  struct drm_file *owner);
+				 struct drm_file *owner);
 int evdi_queue_power_event(struct evdi_device *evdi, int display_id,
-			  bool pwr_on);
+			   bool pwr_on);
 int evdi_ioctl_flipped(struct drm_device *dev, void *data,
 		       struct drm_file *file);
 int evdi_ioctl_cursor_set(struct drm_device *dev, void *data,

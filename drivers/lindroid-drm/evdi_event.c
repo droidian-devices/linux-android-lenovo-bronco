@@ -52,11 +52,8 @@ int evdi_event_system_init(void)
 	int i;
 
 	global_event_pool.cache =
-		kmem_cache_create("evdi_events",
-				  sizeof(struct evdi_event),
-				  0,
-				  SLAB_HWCACHE_ALIGN,
-				  NULL);
+		kmem_cache_create("evdi_events", sizeof(struct evdi_event), 0,
+				  SLAB_HWCACHE_ALIGN, NULL);
 
 	if (!global_event_pool.cache)
 		return -ENOMEM;
@@ -65,11 +62,8 @@ int evdi_event_system_init(void)
 		snprintf(name, sizeof(name), "evdi_events_%d", i);
 
 		global_event_pool.type_cache[i] =
-			kmem_cache_create(name,
-					  sizeof(struct evdi_event),
-					  0,
-					  SLAB_HWCACHE_ALIGN,
-					  NULL);
+			kmem_cache_create(name, sizeof(struct evdi_event), 0,
+					  SLAB_HWCACHE_ALIGN, NULL);
 
 		if (!global_event_pool.type_cache[i])
 			goto err_cache;
@@ -125,10 +119,8 @@ int evdi_event_init(struct evdi_device *evdi)
 }
 
 struct evdi_event *evdi_event_alloc(struct evdi_device *evdi,
-				    enum poll_event_type type,
-				    int poll_id,
-				    void *data,
-				    size_t data_size,
+				    enum poll_event_type type, int poll_id,
+				    void *data, size_t data_size,
 				    struct drm_file *owner)
 {
 	struct evdi_event *event;
@@ -144,8 +136,8 @@ struct evdi_event *evdi_event_alloc(struct evdi_device *evdi,
 	event->type = type;
 	event->poll_id = poll_id;
 
-	event->payload_size = min_t(size_t, data_size,
-				    (size_t)EVDI_EVENT_PAYLOAD_MAX);
+	event->payload_size =
+		min_t(size_t, data_size, (size_t)EVDI_EVENT_PAYLOAD_MAX);
 
 	if (data && data_size)
 		memcpy(event->payload, data, event->payload_size);
@@ -160,14 +152,13 @@ struct evdi_event *evdi_event_alloc(struct evdi_device *evdi,
 
 static void evdi_event_free_rcu_cb(struct rcu_head *head)
 {
-	struct evdi_event *event =
-		container_of(head, struct evdi_event, rcu);
+	struct evdi_event *event = container_of(head, struct evdi_event, rcu);
 
 	if (likely(event->from_pool)) {
 		struct kmem_cache *cache =
-			(event->cache_idx < EVDI_EVENT_TYPE_MAX)
-				? global_event_pool.type_cache[event->cache_idx]
-				: global_event_pool.cache;
+			(event->cache_idx < EVDI_EVENT_TYPE_MAX) ?
+				global_event_pool.type_cache[event->cache_idx] :
+				global_event_pool.cache;
 
 		kmem_cache_free(cache, event);
 	} else {
@@ -215,8 +206,7 @@ static inline bool evdi_event_enqueue(struct evdi_device *evdi,
 	return true;
 }
 
-void evdi_event_queue(struct evdi_device *evdi,
-		      struct evdi_event *event)
+void evdi_event_queue(struct evdi_device *evdi, struct evdi_event *event)
 {
 	if (evdi && event)
 		evdi_event_enqueue(evdi, event);
@@ -255,7 +245,7 @@ int evdi_event_wait(struct evdi_device *evdi)
 
 	ret = wait_event_interruptible(evdi->events.wait_queue,
 				       atomic_read(&evdi->events.stopping) ||
-				       evdi_has_events(evdi));
+					       evdi_has_events(evdi));
 
 	if (ret)
 		return ret;
@@ -266,8 +256,7 @@ int evdi_event_wait(struct evdi_device *evdi)
 	return 0;
 }
 
-void evdi_event_cleanup_file(struct evdi_device *evdi,
-			     struct drm_file *file)
+void evdi_event_cleanup_file(struct evdi_device *evdi, struct drm_file *file)
 {
 	struct evdi_event *event, *tmp;
 
@@ -278,16 +267,14 @@ void evdi_event_cleanup_file(struct evdi_device *evdi,
 
 	spin_lock(&evdi->events.lock);
 
-	list_for_each_entry_safe(event, tmp,
-				 &evdi->events.high_prio, node) {
+	list_for_each_entry_safe (event, tmp, &evdi->events.high_prio, node) {
 		if (event->owner == file) {
 			list_del(&event->node);
 			call_rcu(&event->rcu, evdi_event_free_rcu_cb);
 		}
 	}
 
-	list_for_each_entry_safe(event, tmp,
-				 &evdi->events.normal, node) {
+	list_for_each_entry_safe (event, tmp, &evdi->events.normal, node) {
 		if (event->owner == file) {
 			list_del(&event->node);
 			call_rcu(&event->rcu, evdi_event_free_rcu_cb);
@@ -308,12 +295,12 @@ void evdi_event_queue_reset(struct evdi_device *evdi)
 
 	spin_lock(&evdi->events.lock);
 
-	list_for_each_entry_safe(e, tmp, &evdi->events.normal, node) {
+	list_for_each_entry_safe (e, tmp, &evdi->events.normal, node) {
 		list_del(&e->node);
 		kfree(e);
 	}
 
-	list_for_each_entry_safe(e, tmp, &evdi->events.high_prio, node) {
+	list_for_each_entry_safe (e, tmp, &evdi->events.high_prio, node) {
 		list_del(&e->node);
 		kfree(e);
 	}
