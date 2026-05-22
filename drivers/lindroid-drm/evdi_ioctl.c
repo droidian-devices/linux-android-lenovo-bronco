@@ -312,11 +312,11 @@ int evdi_ioctl_flipped(struct drm_device *dev, void *data,
 int evdi_ioctl_cursor_set(struct drm_device *dev, void *data,
 			  struct drm_file *file)
 {
-	return 0;
+	return -EOPNOTSUPP;
 }
 
 int evdi_ioctl_cursor_move(struct drm_device *dev, void *data,
 			   struct drm_file *file)
 {
-	return 0;
+	return -EOPNOTSUPP;
 }
