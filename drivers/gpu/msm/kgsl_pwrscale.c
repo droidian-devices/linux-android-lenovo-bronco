@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2010-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022, 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/devfreq_cooling.h>
@@ -22,7 +22,7 @@ static struct devfreq_msm_adreno_tz_data adreno_tz_data = {
 
 static void do_devfreq_suspend(struct work_struct *work);
 static void do_devfreq_resume(struct work_struct *work);
-static void do_devfreq_notify(struct kthread_work *work);
+static void do_devfreq_notify(struct work_struct *work);
 
 /*
  * These variables are used to keep the latest data
@@ -147,25 +147,24 @@ void kgsl_pwrscale_update_stats(struct kgsl_device *device)
 void kgsl_pwrscale_update(struct kgsl_device *device)
 {
 	ktime_t t;
-	struct kgsl_pwrscale *pwrscale = &device->pwrscale;
 
 	if (WARN_ON(!mutex_is_locked(&device->mutex)))
 		return;
 
-	if (!pwrscale->enabled)
+	if (!device->pwrscale.enabled)
 		return;
 
 	t = ktime_get();
-	if (ktime_compare(t, pwrscale->next_governor_call) < 0)
+	if (ktime_compare(t, device->pwrscale.next_governor_call) < 0)
 		return;
 
-	pwrscale->next_governor_call = ktime_add_us(t,
+	device->pwrscale.next_governor_call = ktime_add_us(t,
 			KGSL_GOVERNOR_CALL_INTERVAL);
 
 	/* to call update_devfreq() from a kernel thread */
 	if (device->state != KGSL_STATE_SLUMBER)
-		kthread_queue_work(pwrscale->devfreq_notify_worker,
-					&pwrscale->devfreq_notify_work);
+		queue_work(device->pwrscale.devfreq_wq,
+			&device->pwrscale.devfreq_notify_ws);
 }
 
 /*
@@ -343,7 +342,7 @@ int kgsl_devfreq_get_dev_status(struct device *dev,
 
 		last_b->ram_time = device->pwrscale.accum_stats.ram_time;
 		last_b->ram_wait = device->pwrscale.accum_stats.ram_wait;
-		last_b->buslevel = device->pwrctrl.cur_dcvs_buslevel;
+		last_b->buslevel = device->pwrctrl.cur_buslevel;
 
 		pwrlevel = &pwrctrl->pwrlevels[pwrctrl->min_pwrlevel];
 		last_b->gpu_minfreq = pwrlevel->gpu_freq;
@@ -554,10 +553,8 @@ static void pwrscale_busmon_create(struct kgsl_device *device,
 
 	dev_set_name(dev, "kgsl-busmon");
 	dev_set_drvdata(dev, device);
-	if (device_register(dev)) {
-		put_device(dev);
+	if (device_register(dev))
 		return;
-	}
 
 	/* Build out the OPP table for the busmon device */
 	for (i = 0; i < pwr->num_pwrlevels; i++) {
@@ -570,7 +567,7 @@ static void pwrscale_busmon_create(struct kgsl_device *device,
 	ret = devfreq_gpubw_init();
 	if (ret) {
 		dev_err(&pdev->dev, "Failed to add busmon governor: %d\n", ret);
-		device_unregister(dev);
+		put_device(dev);
 		return;
 	}
 
@@ -580,7 +577,7 @@ static void pwrscale_busmon_create(struct kgsl_device *device,
 	if (IS_ERR_OR_NULL(bus_devfreq)) {
 		dev_err(&pdev->dev, "Bus scaling not enabled\n");
 		devfreq_gpubw_exit();
-		device_unregister(dev);
+		put_device(dev);
 		return;
 	}
 
@@ -673,6 +670,7 @@ static int thermal_max_notifier_call(struct notifier_block *nb, unsigned long va
 	if (level == pwr->thermal_pwrlevel)
 		return NOTIFY_OK;
 
+	trace_kgsl_thermal_constraint(max_freq);
 	pwr->thermal_pwrlevel = level;
 
 	mutex_lock(&device->mutex);
@@ -753,13 +751,6 @@ int kgsl_pwrscale_init(struct kgsl_device *device, struct platform_device *pdev,
 		return -ENOMEM;
 	}
 
-	pwrscale->devfreq_notify_worker = kthread_create_worker(0, "kgsl_devfreq_notifier");
-	if (IS_ERR(pwrscale->devfreq_notify_worker)) {
-		ret = PTR_ERR(pwrscale->devfreq_notify_worker);
-		dev_err(device->dev, "Failed to create devfreq notify worker ret: %d\n", ret);
-		return ret;
-	}
-
 	ret = msm_adreno_tz_init();
 	if (ret) {
 		dev_err(device->dev, "Failed to add adreno tz governor: %d\n", ret);
@@ -800,8 +791,8 @@ int kgsl_pwrscale_init(struct kgsl_device *device, struct platform_device *pdev,
 
 	INIT_WORK(&pwrscale->devfreq_suspend_ws, do_devfreq_suspend);
 	INIT_WORK(&pwrscale->devfreq_resume_ws, do_devfreq_resume);
-	kthread_init_work(&pwrscale->devfreq_notify_work, do_devfreq_notify);
-	sched_set_fifo(pwrscale->devfreq_notify_worker->task);
+	INIT_WORK(&pwrscale->devfreq_notify_ws, do_devfreq_notify);
+
 	pwrscale->next_governor_call = ktime_add_us(ktime_get(),
 			KGSL_GOVERNOR_CALL_INTERVAL);
 
@@ -825,17 +816,14 @@ void kgsl_pwrscale_close(struct kgsl_device *device)
 	if (pwrscale->bus_devfreq) {
 		devfreq_remove_device(pwrscale->bus_devfreq);
 		pwrscale->bus_devfreq = NULL;
+		put_device(&pwrscale->busmondev);
 		devfreq_gpubw_exit();
-		device_unregister(&pwrscale->busmondev);
 	}
 
 	if (!pwrscale->devfreqptr)
 		return;
 	if (pwrscale->cooling_dev)
 		devfreq_cooling_unregister(pwrscale->cooling_dev);
-
-	if (!IS_ERR_OR_NULL(pwrscale->devfreq_notify_worker))
-		kthread_destroy_worker(pwrscale->devfreq_notify_worker);
 
 	if (pwrscale->devfreq_wq) {
 		flush_workqueue(pwrscale->devfreq_wq);
@@ -867,10 +855,10 @@ static void do_devfreq_resume(struct work_struct *work)
 	devfreq_resume_device(pwrscale->bus_devfreq);
 }
 
-static void do_devfreq_notify(struct kthread_work *work)
+static void do_devfreq_notify(struct work_struct *work)
 {
 	struct kgsl_pwrscale *pwrscale = container_of(work,
-			struct kgsl_pwrscale, devfreq_notify_work);
+			struct kgsl_pwrscale, devfreq_notify_ws);
 
 	mutex_lock(&pwrscale->devfreqptr->lock);
 	update_devfreq(pwrscale->devfreqptr);

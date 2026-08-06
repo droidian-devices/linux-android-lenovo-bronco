@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef _ADRENO_GEN7_H_
@@ -17,11 +17,13 @@
 #define PIPE_BV 2
 #define PIPE_LPAC 3
 
+/* Forward struct declaration */
+struct gen7_snapshot_block_list;
+
 extern const struct adreno_power_ops gen7_gmu_power_ops;
 extern const struct adreno_power_ops gen7_hwsched_power_ops;
 extern const struct adreno_perfcounters adreno_gen7_perfcounters;
-extern const struct adreno_perfcounters adreno_gen7_hwsched_perfcounters;
-extern const struct adreno_perfcounters adreno_gen7_no_cb_perfcounters;
+extern const struct adreno_perfcounters adreno_gen7_6_0_perfcounters;
 
 struct gen7_gpudev {
 	struct adreno_gpudev base;
@@ -97,6 +99,8 @@ struct adreno_gen7_core {
 	u32 highest_bank_bit;
 	/** @gmu_hub_clk_freq: Gmu hub interface clock frequency */
 	u64 gmu_hub_clk_freq;
+	/** @gen7_snapshot_block_list: Device-specific blocks dumped in the snapshot */
+	const struct gen7_snapshot_block_list *gen7_snapshot_block_list;
 	/**
 	 * @bcl_data: BCL data is expected by gmu in below format.
 	 * Bit 0 contains response type for bcl alarms and bits 1:21 controls sid val
@@ -113,8 +117,6 @@ struct adreno_gen7_core {
 	bool fast_bus_hint;
 	/** @qos_value: GPU qos value to set for each RB. */
 	const u32 *qos_value;
-	/** @rt_bus_hint: IB level hint for real time clients i.e. RB-0 */
-	const u32 rt_bus_hint;
 };
 
 /**

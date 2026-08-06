@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/clk/qcom.h>
@@ -364,22 +364,6 @@ static void a6xx_hwcg_set(struct adreno_device *adreno_dev, bool on)
 
 	kgsl_regread(device, A6XX_RBBM_CLOCK_CNTL, &value);
 
-	/*
-	 * GBIF L2 CGC control is not part of the UCHE and is enabled by
-	 * default. Hence modify the register when CGC disabled is
-	 * requested.
-	 * Note: The below programming will need modification in case
-	 * of change in the register reset value in future.
-	 */
-	if (!on)
-		kgsl_regrmw(device, A6XX_UCHE_GBIF_GX_CONFIG, GENMASK(18, 16),
-				FIELD_PREP(GENMASK(18, 16), 0));
-
-	/* Recommended to always disable GBIF_CX_CONFIG for gen6_3_26_0*/
-	if (adreno_is_gen6_3_26_0(adreno_dev))
-		kgsl_regrmw(device, A6XX_GBIF_CX_CONFIG, GENMASK(18, 16),
-				FIELD_PREP(GENMASK(18, 16), 0));
-
 	if (value == __get_rbbm_clock_cntl_on(adreno_dev) && on)
 		return;
 
@@ -402,6 +386,10 @@ static void a6xx_hwcg_set(struct adreno_device *adreno_dev, bool on)
 	for (i = 0; i < a6xx_core->hwcg_count; i++)
 		kgsl_regwrite(device, a6xx_core->hwcg[i].offset,
 			on ? a6xx_core->hwcg[i].val : 0);
+
+	/* GBIF L2 CGC control is not part of the UCHE */
+	kgsl_regrmw(device, A6XX_UCHE_GBIF_GX_CONFIG, 0x70000,
+			FIELD_PREP(GENMASK(18, 16), on ? 2 : 0));
 
 	/*
 	 * Enable SP clock after programming HWCG registers.
@@ -1394,9 +1382,10 @@ static int a6xx_clear_pending_transactions(struct adreno_device *adreno_dev)
 			A6XX_GBIF_GX_HALT_MASK);
 	}
 
-	ret |= a6xx_halt_gbif(adreno_dev);
+	if (ret)
+		return ret;
 
-	return ret;
+	return a6xx_halt_gbif(adreno_dev);
 }
 
 /**
@@ -1412,12 +1401,9 @@ static int a6xx_reset(struct adreno_device *adreno_dev)
 	int ret;
 	unsigned long flags = device->pwrctrl.ctrl_flags;
 
-	/*
-	 * There is a chance that GPU reset can be successful even
-	 * if GBIF is stuck before reset. Hence do not check for the
-	 * return type.
-	 */
-	a6xx_clear_pending_transactions(adreno_dev);
+	ret = a6xx_clear_pending_transactions(adreno_dev);
+	if (ret)
+		return ret;
 
 	/* Clear ctrl_flags to ensure clocks and regulators are turned off */
 	device->pwrctrl.ctrl_flags = 0;
@@ -2421,7 +2407,6 @@ int a6xx_perfcounter_update(struct adreno_device *adreno_dev,
 	struct cpu_gpu_lock *lock = ptr;
 	u32 *data = ptr + sizeof(*lock);
 	int i, offset = 0;
-	u32 pending_pairs = 2; /* No of pairs to add: <select,value> and <cntl,1> */
 
 	if (kgsl_hwlock(lock)) {
 		kgsl_hwunlock(lock);
@@ -2444,11 +2429,6 @@ int a6xx_perfcounter_update(struct adreno_device *adreno_dev,
 
 		offset += 2;
 	}
-
-	/* Ensure there is enough space in the reglist buffer for new pairs */
-	if ((offset + (pending_pairs * 2)) >=
-		(adreno_dev->pwrup_reglist->size / sizeof(u32)))
-		return -ENOSPC;
 
 	/*
 	 * For all targets A6XX_RBBM_PERFCTR_CNTL needs to be the last entry,

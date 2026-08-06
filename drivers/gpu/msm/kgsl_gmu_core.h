@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2018-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 #ifndef __KGSL_GMU_CORE_H
 #define __KGSL_GMU_CORE_H
@@ -156,22 +156,6 @@ struct gmu_block_header {
 /* For GMU Logs*/
 #define GMU_LOG_SIZE  SZ_16K
 
-/* For GMU virtual register bank */
-#define GMU_VRB_SIZE  SZ_4K
-
-/*
- * GMU Virtual Register Definitions
- * These values are dword offsets into the GMU Virtual Register Bank
- */
-enum gmu_vrb_idx {
-	/* Number of dwords supported by VRB */
-	VRB_SIZE_IDX = 0,
-	/* Contains the address of warmboot scratch buffer */
-	VRB_WARMBOOT_SCRATCH_IDX = 1,
-	/* Contains the address of GMU trace buffer */
-	VRB_TRACE_BUFFER_ADDR_IDX = 2,
-};
-
 /* GMU memdesc entries */
 #define GMU_KERNEL_ENTRIES		16
 
@@ -234,6 +218,7 @@ enum {
 	GMU_PRIV_RSCC_SLEEP_DONE,
 	GMU_PRIV_PM_SUSPEND,
 	GMU_PRIV_PDC_RSC_LOADED,
+	GMU_PRIV_CX_GDSC_WAIT,
 };
 
 struct device_node;
@@ -246,13 +231,12 @@ struct gmu_dev_ops {
 	int (*ifpc_store)(struct kgsl_device *device, unsigned int val);
 	unsigned int (*ifpc_show)(struct kgsl_device *device);
 	void (*cooperative_reset)(struct kgsl_device *device);
+	void (*halt_execution)(struct kgsl_device *device);
 	int (*wait_for_active_transition)(struct kgsl_device *device);
 	bool (*scales_bandwidth)(struct kgsl_device *device);
 	int (*acd_set)(struct kgsl_device *device, bool val);
 	int (*bcl_sid_set)(struct kgsl_device *device, u32 sid_id, u64 sid_val);
 	u64 (*bcl_sid_get)(struct kgsl_device *device, u32 sid_id);
-	void (*send_nmi)(struct kgsl_device *device, bool force);
-	void (*force_first_boot)(struct kgsl_device *device);
 };
 
 /**
@@ -276,7 +260,7 @@ extern struct platform_driver gen7_hwsched_driver;
 /* GMU core functions */
 
 void __init gmu_core_register(void);
-void gmu_core_unregister(void);
+void __exit gmu_core_unregister(void);
 
 bool gmu_core_gpmu_isenabled(struct kgsl_device *device);
 bool gmu_core_scales_bandwidth(struct kgsl_device *device);
@@ -348,14 +332,5 @@ struct iommu_domain;
  */
 int gmu_core_map_memdesc(struct iommu_domain *domain, struct kgsl_memdesc *memdesc,
 		u64 gmuaddr, int attrs);
-void gmu_core_dev_force_first_boot(struct kgsl_device *device);
-
-/**
- * gmu_core_set_vrb_register - set vrb register value at specified index
- * @ptr: vrb host pointer
- * @index: vrb index to write the value
- * @val: value to be writen into vrb
- */
-void gmu_core_set_vrb_register(void *ptr, u32 index, u32 val);
 
 #endif /* __KGSL_GMU_CORE_H */

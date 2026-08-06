@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2011-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/bitfield.h>
@@ -101,7 +101,6 @@ static struct kgsl_iommu_pt *to_iommu_pt(struct kgsl_pagetable *pagetable)
 static u32 get_llcc_flags(struct iommu_domain *domain,
 		struct kgsl_memdesc *memdesc)
 {
-#if 0
 	struct adreno_device *adreno_dev =
 		ADRENO_DEVICE(KGSL_MMU_DEVICE(memdesc->pagetable->mmu));
 
@@ -114,7 +113,6 @@ static u32 get_llcc_flags(struct iommu_domain *domain,
 	 */
 	if (adreno_is_a621(adreno_dev))
 		return IOMMU_USE_UPSTREAM_HINT;
-#endif
 
 	if (_iommu_domain_check_bool(domain, DOMAIN_ATTR_USE_LLC_NWA))
 		return IOMMU_USE_LLC_NWA;
@@ -156,7 +154,7 @@ static int get_sg_from_child(struct sg_table *sgt, struct kgsl_memdesc *child,
 	int pgoffset = (offset >> PAGE_SHIFT);
 	struct scatterlist *target_sg;
 	struct sg_page_iter iter;
-	int i = 0, ret;
+	int ret;
 
 	if (child->pages)
 		return sg_alloc_table_from_pages(sgt,
@@ -169,12 +167,9 @@ static int get_sg_from_child(struct sg_table *sgt, struct kgsl_memdesc *child,
 
 	target_sg = sgt->sgl;
 
-	for_each_sgtable_page(child->sgt, &iter, pgoffset) {
+	for_each_sg_page(child->sgt->sgl, &iter, npages, pgoffset) {
 		sg_set_page(target_sg, sg_page_iter_page(&iter), PAGE_SIZE, 0);
 		target_sg = sg_next(target_sg);
-
-		if (++i == npages)
-			break;
 	}
 
 	return 0;
@@ -580,7 +575,7 @@ static size_t _iommu_map_page_to_range(struct iommu_domain *domain,
 	return mapped;
 }
 
-static ssize_t _iommu_map_sg(struct iommu_domain *domain, u64 gpuaddr,
+static size_t _iommu_map_sg(struct iommu_domain *domain, u64 gpuaddr,
 		struct sg_table *sgt, int prot)
 {
 	/* Sign extend TTBR1 addresses all the way to avoid warning */
@@ -594,8 +589,7 @@ static int
 _kgsl_iommu_map(struct iommu_domain *domain, struct kgsl_memdesc *memdesc)
 {
 	int prot = _iommu_get_protection_flags(domain, memdesc);
-	ssize_t mapped;
-	size_t padding;
+	size_t mapped, padding;
 	int ret = 0;
 
 	/*
@@ -618,9 +612,8 @@ _kgsl_iommu_map(struct iommu_domain *domain, struct kgsl_memdesc *memdesc)
 		sg_free_table(&sgt);
 	}
 
-	/* Check for errors or no pages mapped */
-	if (mapped <= 0)
-		return mapped ? mapped : -ENOMEM;
+	if (!mapped)
+		return -ENOMEM;
 
 	padding = kgsl_memdesc_footprint(memdesc) - mapped;
 
@@ -932,7 +925,7 @@ static struct kgsl_process_private *kgsl_iommu_get_process(u64 ptbase)
 
 	list_for_each_entry(p, &kgsl_driver.process_list, list) {
 		iommu_pt = to_iommu_pt(p->pagetable);
-		if (iommu_pt->ttbr0 == MMU_SW_PT_BASE(ptbase)) {
+		if (iommu_pt->ttbr0 == ptbase) {
 			if (!kgsl_process_private_get(p))
 				p = NULL;
 
@@ -1276,19 +1269,6 @@ static void kgsl_iommu_set_ttbr0(struct kgsl_iommu_context *context,
 	kgsl_iommu_disable_clk(mmu);
 }
 
-static int kgsl_iommu_get_asid(struct kgsl_pagetable *pt, struct kgsl_context *context)
-{
-	struct kgsl_iommu *iommu = to_kgsl_iommu(pt);
-	struct iommu_domain *domain;
-
-	if (kgsl_context_is_lpac(context))
-		domain = to_iommu_domain(&iommu->lpac_context);
-	else
-		domain = to_iommu_domain(&iommu->user_context);
-
-	return qcom_iommu_get_asid_nr(domain);
-}
-
 static int kgsl_iommu_get_context_bank(struct kgsl_pagetable *pt, struct kgsl_context *context)
 {
 	struct kgsl_iommu *iommu = to_kgsl_iommu(pt);
@@ -1339,7 +1319,7 @@ static void _enable_gpuhtw_llc(struct kgsl_mmu *mmu, struct iommu_domain *domain
 		iommu_domain_set_attr(domain, DOMAIN_ATTR_USE_UPSTREAM_HINT, &val);
 }
 
-int kgsl_set_smmu_aperture(struct kgsl_device *device,
+static int set_smmu_aperture(struct kgsl_device *device,
 		struct kgsl_iommu_context *context)
 {
 	int ret;
@@ -1352,7 +1332,7 @@ int kgsl_set_smmu_aperture(struct kgsl_device *device,
 		ret = qcom_scm_kgsl_set_smmu_aperture(context->cb_num);
 
 	if (ret)
-		dev_err(&device->pdev->dev, "Unable to set the SMMU aperture: %d. The aperture needs to be set to use per-process pagetables\n",
+		dev_err(device->dev, "Unable to set the SMMU aperture: %d. The aperture needs to be set to use per-process pagetables\n",
 			ret);
 
 	return ret;
@@ -1371,7 +1351,7 @@ static int set_smmu_lpac_aperture(struct kgsl_device *device,
 		ret = qcom_scm_kgsl_set_smmu_lpac_aperture(context->cb_num);
 
 	if (ret)
-		dev_err(&device->pdev->dev, "Unable to set the LPAC SMMU aperture: %d. The aperture needs to be set to use per-process pagetables\n",
+		dev_err(device->dev, "Unable to set the LPAC SMMU aperture: %d. The aperture needs to be set to use per-process pagetables\n",
 			ret);
 
 	return ret;
@@ -1614,6 +1594,9 @@ static void kgsl_iommu_close(struct kgsl_mmu *mmu)
 		__free_page(kgsl_guard_page);
 		kgsl_guard_page = NULL;
 	}
+
+	of_platform_depopulate(&iommu->pdev->dev);
+	platform_device_put(iommu->pdev);
 
 	kmem_cache_destroy(addr_entry_cache);
 	addr_entry_cache = NULL;
@@ -2107,20 +2090,14 @@ static uint64_t kgsl_iommu_find_svm_region(struct kgsl_pagetable *pagetable,
 static bool iommu_addr_in_svm_ranges(struct kgsl_pagetable *pagetable,
 	u64 gpuaddr, u64 size)
 {
-	u64 end = gpuaddr + size;
-
-	/* Make sure size is not zero and we don't wrap around */
-	if (end <= gpuaddr)
-		return false;
-
 	if ((gpuaddr >= pagetable->compat_va_start && gpuaddr < pagetable->compat_va_end) &&
-		(end > pagetable->compat_va_start &&
-			end <= pagetable->compat_va_end))
+		((gpuaddr + size) > pagetable->compat_va_start &&
+			(gpuaddr + size) <= pagetable->compat_va_end))
 		return true;
 
 	if ((gpuaddr >= pagetable->svm_start && gpuaddr < pagetable->svm_end) &&
-		(end > pagetable->svm_start &&
-			end <= pagetable->svm_end))
+		((gpuaddr + size) > pagetable->svm_start &&
+			(gpuaddr + size) <= pagetable->svm_end))
 		return true;
 
 	return false;
@@ -2242,20 +2219,19 @@ static int kgsl_iommu_svm_range(struct kgsl_pagetable *pagetable,
 static bool kgsl_iommu_addr_in_range(struct kgsl_pagetable *pagetable,
 		uint64_t gpuaddr, uint64_t size)
 {
-	u64 end = gpuaddr + size;
-
-	/* Make sure we don't wrap around */
-	if (gpuaddr == 0 || end < gpuaddr)
+	if (gpuaddr == 0)
 		return false;
 
-	if (gpuaddr >= pagetable->va_start && end <= pagetable->va_end)
+	if (gpuaddr >= pagetable->va_start && (gpuaddr + size) <
+			pagetable->va_end)
 		return true;
 
-	if (gpuaddr >= pagetable->compat_va_start &&
-		end <= pagetable->compat_va_end)
+	if (gpuaddr >= pagetable->compat_va_start && (gpuaddr + size) <
+			pagetable->compat_va_end)
 		return true;
 
-	if (gpuaddr >= pagetable->svm_start && end <= pagetable->svm_end)
+	if (gpuaddr >= pagetable->svm_start && (gpuaddr + size) <
+			pagetable->svm_end)
 		return true;
 
 	return false;
@@ -2268,7 +2244,6 @@ static int kgsl_iommu_setup_context(struct kgsl_mmu *mmu,
 {
 	struct device_node *node = of_find_node_by_name(parent, name);
 	struct platform_device *pdev;
-	struct kgsl_device *device = KGSL_MMU_DEVICE(mmu);
 	int ret;
 
 	if (!node)
@@ -2283,7 +2258,7 @@ static int kgsl_iommu_setup_context(struct kgsl_mmu *mmu,
 
 	context->cb_num = -1;
 	context->name = name;
-	context->kgsldev = device;
+	context->kgsldev = KGSL_MMU_DEVICE(mmu);
 	context->pdev = pdev;
 	ratelimit_default_init(&context->ratelimit);
 
@@ -2314,7 +2289,7 @@ static int kgsl_iommu_setup_context(struct kgsl_mmu *mmu,
 	if (context->cb_num >= 0)
 		return 0;
 
-	dev_err(&device->pdev->dev, "Couldn't get the context bank for %s: %d\n",
+	dev_err(KGSL_MMU_DEVICE(mmu)->dev, "Couldn't get the context bank for %s: %d\n",
 		context->name, context->cb_num);
 
 	iommu_detach_device(context->domain, &context->pdev->dev);
@@ -2354,11 +2329,9 @@ static int iommu_probe_user_context(struct kgsl_device *device,
 		dev_err(&iommu->user_context.pdev->dev,
 				"Unable to create device link to gpu device\n");
 
-	ret = kgsl_iommu_setup_context(mmu, node, &iommu->lpac_context,
-			"gfx3d_lpac", kgsl_iommu_lpac_fault_handler);
-	/* LPAC is optional, ignore setup failures in absence of LPAC feature */
-	if ((ret < 0) && ADRENO_FEATURE(adreno_dev, ADRENO_LPAC))
-		goto err;
+	/* LPAC is optional so don't worry if it returns error */
+	kgsl_iommu_setup_context(mmu, node, &iommu->lpac_context,
+		"gfx3d_lpac", kgsl_iommu_lpac_fault_handler);
 
 	/*
 	 * FIXME: If adreno_smmu->cookie wasn't initialized then we can't do
@@ -2379,25 +2352,14 @@ static int iommu_probe_user_context(struct kgsl_device *device,
 	/* Enable TTBR0 on the default and LPAC contexts */
 	kgsl_iommu_set_ttbr0(&iommu->user_context, mmu, &pt->info.cfg);
 
-	kgsl_set_smmu_aperture(device, &iommu->user_context);
+	set_smmu_aperture(device, &iommu->user_context);
 
 	kgsl_iommu_set_ttbr0(&iommu->lpac_context, mmu, &pt->info.cfg);
 
-	ret = set_smmu_lpac_aperture(device, &iommu->lpac_context);
-	/* LPAC is optional, ignore setup failures in absence of LPAC feature */
-	if ((ret < 0) && ADRENO_FEATURE(adreno_dev, ADRENO_LPAC)) {
-		kgsl_iommu_detach_context(&iommu->lpac_context);
-		goto err;
-	}
+	if (adreno_dev->lpac_enabled)
+		set_smmu_lpac_aperture(device, &iommu->lpac_context);
 
 	return 0;
-
-err:
-	kgsl_mmu_putpagetable(mmu->defaultpagetable);
-	mmu->defaultpagetable = NULL;
-	kgsl_iommu_detach_context(&iommu->user_context);
-
-	return ret;
 }
 
 static int iommu_probe_secure_context(struct kgsl_device *device,
@@ -2440,7 +2402,7 @@ static int iommu_probe_secure_context(struct kgsl_device *device,
 	ret = iommu_domain_set_attr(context->domain, DOMAIN_ATTR_SECURE_VMID,
 		&secure_vmid);
 	if (ret) {
-		dev_err(&device->pdev->dev, "Unable to set the secure VMID: %d\n", ret);
+		dev_err(device->dev, "Unable to set the secure VMID: %d\n", ret);
 		iommu_domain_free(context->domain);
 		context->domain = NULL;
 
@@ -2516,14 +2478,19 @@ static void kgsl_iommu_check_config(struct kgsl_mmu *mmu,
 	of_node_put(node);
 }
 
-int kgsl_iommu_bind(struct kgsl_device *device, struct platform_device *pdev)
+int kgsl_iommu_probe(struct kgsl_device *device)
 {
 	u32 val[2];
 	int ret, i;
 	struct kgsl_iommu *iommu = KGSL_IOMMU(device);
+	struct platform_device *pdev;
 	struct kgsl_mmu *mmu = &device->mmu;
-	struct device_node *node = pdev->dev.of_node;
+	struct device_node *node;
 	struct kgsl_global_memdesc *md;
+
+	node = of_find_compatible_node(NULL, NULL, "qcom,kgsl-smmu-v2");
+	if (!node)
+		return -ENODEV;
 
 	/* Create a kmem cache for the pagetable address objects */
 	if (!addr_entry_cache) {
@@ -2536,7 +2503,7 @@ int kgsl_iommu_bind(struct kgsl_device *device, struct platform_device *pdev)
 
 	ret = of_property_read_u32_array(node, "reg", val, 2);
 	if (ret) {
-		dev_err(&device->pdev->dev,
+		dev_err(device->dev,
 			"%pOF: Unable to read KGSL IOMMU register range\n",
 			node);
 		goto err;
@@ -2549,12 +2516,14 @@ int kgsl_iommu_bind(struct kgsl_device *device, struct platform_device *pdev)
 		goto err;
 	}
 
+	pdev = of_find_device_by_node(node);
 	iommu->pdev = pdev;
 	iommu->num_clks = 0;
 
 	iommu->clks = devm_kcalloc(&pdev->dev, ARRAY_SIZE(kgsl_iommu_clocks),
 				sizeof(*iommu->clks), GFP_KERNEL);
 	if (!iommu->clks) {
+		platform_device_put(pdev);
 		ret = -ENOMEM;
 		goto err;
 	}
@@ -2578,6 +2547,9 @@ int kgsl_iommu_bind(struct kgsl_device *device, struct platform_device *pdev)
 	mmu->type = KGSL_MMU_TYPE_IOMMU;
 	mmu->mmu_ops = &kgsl_iommu_ops;
 
+	/* Fill out the rest of the devices in the node */
+	of_platform_populate(node, NULL, NULL, &pdev->dev);
+
 	/* Peek at the phandle to set up configuration */
 	kgsl_iommu_check_config(mmu, node);
 
@@ -2585,11 +2557,13 @@ int kgsl_iommu_bind(struct kgsl_device *device, struct platform_device *pdev)
 	ret = iommu_probe_user_context(device, node);
 	if (ret) {
 		of_platform_depopulate(&pdev->dev);
+		platform_device_put(pdev);
 		goto err;
 	}
 
 	/* Probe the secure pagetable (this is optional) */
 	iommu_probe_secure_context(device, node);
+	of_node_put(node);
 
 	/* Map any globals that might have been created early */
 	list_for_each_entry(md, &device->globals, node)
@@ -2626,6 +2600,7 @@ err:
 	kmem_cache_destroy(addr_entry_cache);
 	addr_entry_cache = NULL;
 
+	of_node_put(node);
 	return ret;
 }
 
@@ -2652,7 +2627,6 @@ static const struct kgsl_mmu_pt_ops iopgtbl_pt_ops = {
 	.mmu_destroy_pagetable = kgsl_iommu_destroy_pagetable,
 	.get_ttbr0 = kgsl_iommu_get_ttbr0,
 	.get_context_bank = kgsl_iommu_get_context_bank,
-	.get_asid = kgsl_iommu_get_asid,
 	.get_gpuaddr = kgsl_iommu_get_gpuaddr,
 	.put_gpuaddr = kgsl_iommu_put_gpuaddr,
 	.set_svm_region = kgsl_iommu_set_svm_region,
@@ -2666,7 +2640,6 @@ static const struct kgsl_mmu_pt_ops secure_pt_ops = {
 	.mmu_unmap = kgsl_iommu_secure_unmap,
 	.mmu_destroy_pagetable = kgsl_iommu_destroy_pagetable,
 	.get_context_bank = kgsl_iommu_get_context_bank,
-	.get_asid = kgsl_iommu_get_asid,
 	.get_gpuaddr = kgsl_iommu_get_gpuaddr,
 	.put_gpuaddr = kgsl_iommu_put_gpuaddr,
 	.addr_in_range = kgsl_iommu_addr_in_range,
@@ -2678,7 +2651,6 @@ static const struct kgsl_mmu_pt_ops default_pt_ops = {
 	.mmu_destroy_pagetable = kgsl_iommu_destroy_default_pagetable,
 	.get_ttbr0 = kgsl_iommu_get_ttbr0,
 	.get_context_bank = kgsl_iommu_get_context_bank,
-	.get_asid = kgsl_iommu_get_asid,
 	.get_gpuaddr = kgsl_iommu_get_gpuaddr,
 	.put_gpuaddr = kgsl_iommu_put_gpuaddr,
 	.addr_in_range = kgsl_iommu_addr_in_range,

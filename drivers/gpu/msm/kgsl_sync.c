@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2012-2019, 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022, 2024, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/file.h>
@@ -232,11 +232,10 @@ int kgsl_add_fence_event(struct kgsl_device *device,
 		ret = -EFAULT;
 		goto out;
 	}
+	fd_install(priv.fence_fd, kfence->sync_file->file);
 
 	if (!retired)
 		device->ftbl->create_hw_fence(device, kfence);
-
-	fd_install(priv.fence_fd, kfence->sync_file->file);
 
 out:
 	kgsl_context_put(context);
@@ -429,39 +428,16 @@ static void kgsl_sync_fence_callback(struct dma_fence *fence,
 	kcb->func(kcb->priv);
 }
 
-bool is_kgsl_fence(struct dma_fence *f)
-{
-	if (f->ops == &kgsl_sync_fence_ops)
-		return true;
-
-	return false;
-}
-
-#ifdef CONFIG_QCOM_KGSL_DEBUG
-static void kgsl_count_hw_fences(struct kgsl_drawobj_sync_event *event, struct dma_fence *fence)
-{
-	/*
-	 * Even one sw-only fence in this sync object means we can't send this
-	 * sync object to the hardware
-	 */
-	if (event->syncobj->flags & KGSL_SYNCOBJ_SW)
-		return;
-
-	if (!test_bit(MSM_HW_FENCE_FLAG_ENABLED_BIT, &fence->flags))
-		event->syncobj->flags |= KGSL_SYNCOBJ_SW;
-	else
-		event->syncobj->num_hw_fence++;
-
-}
-
-static void kgsl_get_fence_info(struct dma_fence *fence,
-	struct event_fence_info *info_ptr, void *priv)
+static void kgsl_get_fence_names(struct dma_fence *fence,
+	struct event_fence_info *info_ptr)
 {
 	unsigned int num_fences;
 	struct dma_fence **fences;
 	struct dma_fence_array *array;
-	struct kgsl_drawobj_sync_event *event = priv;
 	int i;
+
+	if (!info_ptr)
+		return;
 
 	array = to_dma_fence_array(fence);
 
@@ -473,13 +449,10 @@ static void kgsl_get_fence_info(struct dma_fence *fence,
 		fences = &fence;
 	}
 
-	if (!info_ptr)
-		goto count;
-
 	info_ptr->fences = kcalloc(num_fences, sizeof(struct fence_info),
 			GFP_KERNEL);
 	if (info_ptr->fences == NULL)
-		goto count;
+		return;
 
 	info_ptr->num_fences = num_fences;
 
@@ -498,24 +471,11 @@ static void kgsl_get_fence_info(struct dma_fence *fence,
 			f->ops->fence_value_str(f, fi->name + len,
 				sizeof(fi->name) - len);
 		}
-
-		kgsl_count_hw_fences(event, f);
 	}
-
-	return;
-count:
-	for (i = 0; i < num_fences; i++)
-		kgsl_count_hw_fences(event, fences[i]);
 }
-#endif
 
-#ifdef CONFIG_QCOM_KGSL_DEBUG
 struct kgsl_sync_fence_cb *kgsl_sync_fence_async_wait(int fd,
 	bool (*func)(void *priv), void *priv, struct event_fence_info *info_ptr)
-#else
-struct kgsl_sync_fence_cb *kgsl_sync_fence_async_wait(int fd,
-	bool (*func)(void *priv), void *priv)
-#endif
 {
 	struct kgsl_sync_fence_cb *kcb;
 	struct dma_fence *fence;
@@ -536,9 +496,7 @@ struct kgsl_sync_fence_cb *kgsl_sync_fence_async_wait(int fd,
 	kcb->priv = priv;
 	kcb->func = func;
 
-#ifdef CONFIG_QCOM_KGSL_DEBUG
-	kgsl_get_fence_info(fence, info_ptr, priv);
-#endif
+	kgsl_get_fence_names(fence, info_ptr);
 
 	/* if status then error or signaled */
 	status = dma_fence_add_callback(fence, &kcb->fence_cb,

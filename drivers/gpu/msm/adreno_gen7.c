@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/io.h>
@@ -46,7 +46,6 @@ static const u32 gen7_ifpc_pwrup_reglist[] = {
 	GEN7_TPL1_NC_MODE_CNTL,
 	GEN7_CP_DBG_ECO_CNTL,
 	GEN7_CP_PROTECT_CNTL,
-	GEN7_CP_LPAC_PROTECT_CNTL,
 	GEN7_CP_PROTECT_REG,
 	GEN7_CP_PROTECT_REG+1,
 	GEN7_CP_PROTECT_REG+2,
@@ -214,12 +213,13 @@ int gen7_init(struct adreno_device *adreno_dev)
 	if (of_fdt_get_ddrtype() == 0x7)
 		adreno_dev->highest_bank_bit = 14;
 
+	gen7_crashdump_init(adreno_dev);
+
 	return adreno_allocate_global(device, &adreno_dev->pwrup_reglist,
 		PAGE_SIZE, 0, 0, KGSL_MEMDESC_PRIVILEGED,
 		"powerup_register_list");
 }
 
-#define GEN7_PROTECT_DEFAULT (BIT(0) | BIT(1) | BIT(3))
 static void gen7_protect_init(struct adreno_device *adreno_dev)
 {
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
@@ -232,10 +232,8 @@ static void gen7_protect_init(struct adreno_device *adreno_dev)
 	 * protect violation and select the last span to protect from the start
 	 * address all the way to the end of the register address space
 	 */
-	kgsl_regwrite(device, GEN7_CP_PROTECT_CNTL, GEN7_PROTECT_DEFAULT);
-
-	if (adreno_dev->lpac_enabled)
-		kgsl_regwrite(device, GEN7_CP_LPAC_PROTECT_CNTL, GEN7_PROTECT_DEFAULT);
+	kgsl_regwrite(device, GEN7_CP_PROTECT_CNTL,
+		BIT(0) | BIT(1) | BIT(3));
 
 	/* Program each register defined by the core definition */
 	for (i = 0; regs[i].reg; i++) {
@@ -540,7 +538,7 @@ int gen7_start(struct adreno_device *adreno_dev)
 	 * the prefetch granularity size.
 	 */
 	if (adreno_is_gen7_0_0(adreno_dev) || adreno_is_gen7_0_1(adreno_dev) ||
-		adreno_is_gen7_4_0(adreno_dev) || adreno_is_gen7_6_0(adreno_dev)) {
+		adreno_is_gen7_4_0(adreno_dev)) {
 		kgsl_regwrite(device, GEN7_CP_CHICKEN_DBG, 0x1);
 		kgsl_regwrite(device, GEN7_CP_BV_CHICKEN_DBG, 0x1);
 		kgsl_regwrite(device, GEN7_CP_LPAC_CHICKEN_DBG, 0x1);
@@ -670,7 +668,7 @@ static int gen7_post_start(struct adreno_device *adreno_dev)
 	if (!adreno_is_preemption_enabled(adreno_dev))
 		return 0;
 
-	kmd_postamble_addr = SCRATCH_POSTAMBLE_ADDR(KGSL_DEVICE(adreno_dev));
+	kmd_postamble_addr = PREEMPT_SCRATCH_ADDR(adreno_dev, KMD_POSTAMBLE_IDX);
 	gen7_preemption_prepare_postamble(adreno_dev);
 
 	cmds = adreno_ringbuffer_allocspace(rb, (preempt->postamble_len ? 16 : 12));
@@ -943,16 +941,8 @@ static void gen7_err_callback(struct adreno_device *adreno_dev, int bit)
 
 	switch (bit) {
 	case GEN7_INT_AHBERROR:
-		{
-		u32 err_details_0, err_details_1;
-
-		kgsl_regread(device, GEN7_CP_RL_ERROR_DETAILS_0, &err_details_0);
-		kgsl_regread(device, GEN7_CP_RL_ERROR_DETAILS_1, &err_details_1);
-		dev_crit_ratelimited(dev,
-			"CP: AHB bus error, CP_RL_ERROR_DETAILS_0:0x%x CP_RL_ERROR_DETAILS_1:0x%x\n",
-			err_details_0, err_details_1);
+		dev_crit_ratelimited(dev, "CP: AHB bus error\n");
 		break;
-		}
 	case GEN7_INT_ATBASYNCFIFOOVERFLOW:
 		dev_crit_ratelimited(dev, "RBBM: ATB ASYNC overflow\n");
 		break;
@@ -1216,6 +1206,8 @@ static irqreturn_t gen7_irq_handler(struct adreno_device *adreno_dev)
 
 	ret = adreno_irq_callbacks(adreno_dev, gen7_irq_funcs, status);
 
+	trace_kgsl_gen7_irq_status(adreno_dev, status);
+
 done:
 	/* If hard fault, then let snapshot turn off the keepalive */
 	if (!(adreno_gpu_fault(adreno_dev) & ADRENO_HARD_FAULT))
@@ -1228,7 +1220,6 @@ int gen7_probe_common(struct platform_device *pdev,
 	struct adreno_device *adreno_dev, u32 chipid,
 	const struct adreno_gpu_core *gpucore)
 {
-	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	const struct adreno_gpudev *gpudev = gpucore->gpudev;
 	const struct adreno_gen7_core *gen7_core = container_of(gpucore,
 			struct adreno_gen7_core, base);
@@ -1245,11 +1236,7 @@ int gen7_probe_common(struct platform_device *pdev,
 	adreno_dev->preempt.skipsaverestore = true;
 	adreno_dev->preempt.usesgmem = true;
 
-	device->pwrctrl.rt_bus_hint = gen7_core->rt_bus_hint;
 	kgsl_pwrscale_fast_bus_hint(gen7_core->fast_bus_hint);
-
-	if (adreno_is_gen7_3_0(adreno_dev))
-		adreno_drawobj_timeout = 4500;
 
 	return adreno_device_probe(pdev, adreno_dev);
 }
@@ -1277,41 +1264,6 @@ static unsigned int gen7_register_offsets[ADRENO_REG_REGISTER_MAX] = {
 			GEN7_GMU_GMU2HOST_INTR_MASK),
 };
 
-static bool gen7_acquire_cp_semaphore(struct adreno_device *adreno_dev)
-{
-	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
-	u32 sem, i;
-
-	for (i = 0; i < 10; i++) {
-		kgsl_regwrite(device, GEN7_CP_SEMAPHORE_REG_0, BIT(8));
-
-		/*
-		 * Make sure the previous register write is posted before
-		 * checking the CP sempahore status
-		 */
-		mb();
-
-		kgsl_regread(device, GEN7_CP_SEMAPHORE_REG_0, &sem);
-		if (sem)
-			return true;
-
-		udelay(10);
-	}
-
-	/* Check CP semaphore status one last time */
-	kgsl_regread(device, GEN7_CP_SEMAPHORE_REG_0, &sem);
-
-	if (!sem)
-		return false;
-
-	return true;
-}
-
-static void gen7_release_cp_semaphore(struct adreno_device *adreno_dev)
-{
-	kgsl_regwrite(KGSL_DEVICE(adreno_dev), GEN7_CP_SEMAPHORE_REG_0, 0);
-}
-
 int gen7_perfcounter_update(struct adreno_device *adreno_dev,
 	struct adreno_perfcount_register *reg, bool update_reg, u32 pipe)
 {
@@ -1319,17 +1271,10 @@ int gen7_perfcounter_update(struct adreno_device *adreno_dev,
 	struct cpu_gpu_lock *lock = ptr;
 	u32 *data = ptr + sizeof(*lock);
 	int i, offset = (lock->ifpc_list_len + lock->preemption_list_len) * 2;
-	unsigned long irq_flags;
-	int ret = 0;
-	u32 pending_triplets = 2;
-
-	if (!ADRENO_ACQUIRE_CP_SEMAPHORE(adreno_dev, irq_flags))
-		return -EBUSY;
 
 	if (kgsl_hwlock(lock)) {
 		kgsl_hwunlock(lock);
-		ret = -EBUSY;
-		goto err;
+		return -EBUSY;
 	}
 
 	/*
@@ -1347,12 +1292,6 @@ int gen7_perfcounter_update(struct adreno_device *adreno_dev,
 			break;
 
 		offset += 3;
-	}
-
-	/* Ensure there is enough space in the reglist buffer for new triplets */
-	if ((offset + (pending_triplets * 3)) >=
-		(adreno_dev->pwrup_reglist->size / sizeof(u32))) {
-		return -ENOSPC;
 	}
 
 	/*
@@ -1376,10 +1315,7 @@ update:
 			reg->countable);
 
 	kgsl_hwunlock(lock);
-
-err:
-	ADRENO_RELEASE_CP_SEMAPHORE(adreno_dev, irq_flags);
-	return ret;
+	return 0;
 }
 
 u64 gen7_read_alwayson(struct adreno_device *adreno_dev)
@@ -1405,7 +1341,7 @@ u64 gen7_read_alwayson(struct adreno_device *adreno_dev)
 
 static void gen7_remove(struct adreno_device *adreno_dev)
 {
-	if (adreno_is_preemption_enabled(adreno_dev))
+	if (ADRENO_FEATURE(adreno_dev, ADRENO_PREEMPTION))
 		del_timer(&adreno_dev->preempt.timer);
 }
 
@@ -1481,6 +1417,9 @@ static void gen7_power_stats(struct adreno_device *adreno_dev,
 		c = counter_delta(device, GEN7_GMU_CX_GMU_POWER_COUNTER_XOCLK_3_L,
 			&busy->throttle_cycles[2]);
 
+		if (a || b || c)
+			trace_kgsl_bcl_clock_throttling(a, b, c);
+
 		if (adreno_is_gen7_6_0(adreno_dev)) {
 			u32 bcl_throttle = counter_delta(device,
 				GEN7_GMU_CX_GMU_POWER_COUNTER_XOCLK_5_L, &busy->bcl_throttle);
@@ -1533,6 +1472,7 @@ const struct gen7_gpudev adreno_gen7_hwsched_gpudev = {
 	.base = {
 		.reg_offsets = gen7_register_offsets,
 		.probe = gen7_hwsched_probe,
+		.snapshot = gen7_hwsched_snapshot,
 		.irq_handler = gen7_irq_handler,
 		.iommu_fault_block = gen7_iommu_fault_block,
 		.preemption_context_init = gen7_preemption_context_init,
@@ -1547,8 +1487,6 @@ const struct gen7_gpudev adreno_gen7_hwsched_gpudev = {
 		.gx_is_on = gen7_gmu_gx_is_on,
 		.send_recurring_cmdobj = gen7_hwsched_send_recurring_cmdobj,
 		.context_destroy = gen7_hwsched_context_destroy,
-		.acquire_cp_semaphore = gen7_acquire_cp_semaphore,
-		.release_cp_semaphore = gen7_release_cp_semaphore,
 	},
 	.hfi_probe = gen7_hwsched_hfi_probe,
 	.hfi_remove = gen7_hwsched_hfi_remove,
@@ -1559,6 +1497,7 @@ const struct gen7_gpudev adreno_gen7_gmu_gpudev = {
 	.base = {
 		.reg_offsets = gen7_register_offsets,
 		.probe = gen7_gmu_device_probe,
+		.snapshot = gen7_gmu_snapshot,
 		.irq_handler = gen7_irq_handler,
 		.rb_start = gen7_rb_start,
 		.gpu_keepalive = gen7_gpu_keepalive,
@@ -1575,8 +1514,6 @@ const struct gen7_gpudev adreno_gen7_gmu_gpudev = {
 		.setproperty = gen7_setproperty,
 		.add_to_va_minidump = gen7_gmu_add_to_minidump,
 		.gx_is_on = gen7_gmu_gx_is_on,
-		.acquire_cp_semaphore = gen7_acquire_cp_semaphore,
-		.release_cp_semaphore = gen7_release_cp_semaphore,
 	},
 	.hfi_probe = gen7_gmu_hfi_probe,
 	.handle_watchdog = gen7_gmu_handle_watchdog,

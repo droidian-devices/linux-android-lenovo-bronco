@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include "gen7_reg.h"
@@ -132,8 +132,6 @@ static void gen7_gmu_snapshot_memories(struct kgsl_device *device,
 			desc.type = SNAPSHOT_GMU_MEM_LOG;
 		else if (md == gmu->dump_mem)
 			desc.type = SNAPSHOT_GMU_MEM_DEBUG;
-		else if (md == gmu->vrb)
-			desc.type = SNAPSHOT_GMU_MEM_VRB;
 		else
 			desc.type = SNAPSHOT_GMU_MEM_BIN_BLOCK;
 
@@ -292,6 +290,10 @@ void gen7_gmu_snapshot(struct adreno_device *adreno_dev,
 	struct kgsl_snapshot *snapshot)
 {
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+
+	/* Send nmi only if it was a gmu fault */
+	if (device->gmu_fault)
+		gen7_gmu_send_nmi(adreno_dev, false);
 
 	/*
 	 * Dump external register first to have GPUCC and other external

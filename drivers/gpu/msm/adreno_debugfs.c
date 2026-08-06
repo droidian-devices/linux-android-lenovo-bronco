@@ -43,12 +43,18 @@ DEFINE_DEBUGFS_ATTRIBUTE(_isdb_fops, _isdb_get, _isdb_set, "%llu\n");
 
 static int _ctxt_record_size_set(void *data, u64 val)
 {
+	struct kgsl_device *device = data;
+
+	device->snapshot_ctxt_record_size = val;
+
 	return 0;
 }
 
 static int _ctxt_record_size_get(void *data, u64 *val)
 {
-	*val = 0;
+	struct kgsl_device *device = data;
+
+	*val = device->snapshot_ctxt_record_size;
 	return 0;
 }
 
@@ -176,7 +182,6 @@ static void sync_event_print(struct seq_file *s,
 				sync_event->context->id, sync_event->timestamp);
 		break;
 	}
-#ifdef CONFIG_QCOM_KGSL_DEBUG
 	case KGSL_CMD_SYNCPOINT_TYPE_FENCE: {
 		int i;
 		struct event_fence_info *info = sync_event->priv;
@@ -186,7 +191,6 @@ static void sync_event_print(struct seq_file *s,
 				info->fences[i].name);
 		break;
 	}
-#endif
 	case KGSL_CMD_SYNCPOINT_TYPE_TIMELINE: {
 		int j;
 		struct event_timeline_info *info = sync_event->priv;
@@ -519,8 +523,6 @@ void adreno_debugfs_init(struct adreno_device *adreno_dev)
 		device, &_ctxt_record_size_fops);
 	debugfs_create_file("gpu_client_pf", 0644, snapshot_dir,
 		device, &_gpu_client_pf_fops);
-	debugfs_create_bool("dump_all_ibs", 0644, snapshot_dir,
-		&device->dump_all_ibs);
 
 	adreno_dev->bcl_debugfs_dir = debugfs_create_dir("bcl", device->d_debugfs);
 	if (!IS_ERR_OR_NULL(adreno_dev->bcl_debugfs_dir)) {

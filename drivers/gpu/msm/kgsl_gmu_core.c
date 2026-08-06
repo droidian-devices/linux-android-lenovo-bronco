@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2018-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/iopoll.h>
@@ -14,8 +14,8 @@
 #include "kgsl_trace.h"
 
 static const struct of_device_id gmu_match_table[] = {
-//	{ .compatible = "qcom,gpu-gmu", .data = &a6xx_gmu_driver },
-//	{ .compatible = "qcom,gpu-rgmu", .data = &a6xx_rgmu_driver },
+	{ .compatible = "qcom,gpu-gmu", .data = &a6xx_gmu_driver },
+	{ .compatible = "qcom,gpu-rgmu", .data = &a6xx_rgmu_driver },
 	{ .compatible = "qcom,gen7-gmu", .data = &gen7_gmu_driver },
 	{},
 };
@@ -34,7 +34,7 @@ void __init gmu_core_register(void)
 	of_node_put(node);
 }
 
-void gmu_core_unregister(void)
+void __exit gmu_core_unregister(void)
 {
 	const struct of_device_id *match;
 	struct device_node *node;
@@ -164,12 +164,6 @@ int gmu_core_dev_wait_for_active_transition(struct kgsl_device *device)
 
 void gmu_core_fault_snapshot(struct kgsl_device *device)
 {
-	const struct gmu_dev_ops *ops = GMU_DEVICE_OPS(device);
-
-	/* Send NMI first to halt GMU and capture the state close to the point of failure */
-	if (ops && ops->send_nmi)
-		ops->send_nmi(device, false);
-
 	kgsl_device_snapshot(device, NULL, NULL, true);
 }
 
@@ -186,7 +180,7 @@ int gmu_core_timed_poll_check(struct kgsl_device *device,
 int gmu_core_map_memdesc(struct iommu_domain *domain, struct kgsl_memdesc *memdesc,
 		u64 gmuaddr, int attrs)
 {
-	ssize_t mapped;
+	size_t mapped;
 
 	if (!memdesc->pages) {
 		mapped = iommu_map_sg(domain, gmuaddr, memdesc->sgt->sgl,
@@ -205,26 +199,5 @@ int gmu_core_map_memdesc(struct iommu_domain *domain, struct kgsl_memdesc *memde
 		sg_free_table(&sgt);
 	}
 
-	if (!mapped)
-		mapped = -ENOMEM;
-
-	return (mapped < 0) ? mapped : 0;
-}
-
-void gmu_core_dev_force_first_boot(struct kgsl_device *device)
-{
-	const struct gmu_dev_ops *ops = GMU_DEVICE_OPS(device);
-
-	if (ops && ops->force_first_boot)
-		return ops->force_first_boot(device);
-}
-
-void gmu_core_set_vrb_register(void *ptr, u32 index, u32 val)
-{
-	u32 *vrb = ptr;
-
-	vrb[index] = val;
-
-	/* Make sure the vrb write is posted before moving ahead */
-	wmb();
+	return mapped == 0 ? -ENOMEM : 0;
 }

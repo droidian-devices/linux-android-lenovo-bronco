@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2016-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 /*
@@ -27,7 +27,6 @@
 #include "kgsl_device.h"
 #include "kgsl_drawobj.h"
 #include "kgsl_eventlog.h"
-#include "kgsl_sharedmem.h"
 #include "kgsl_sync.h"
 #include "kgsl_timeline.h"
 #include "kgsl_trace.h"
@@ -46,7 +45,6 @@ static void syncobj_destroy_object(struct kgsl_drawobj *drawobj)
 	for (i = 0; i < syncobj->numsyncs; i++) {
 		struct kgsl_drawobj_sync_event *event = &syncobj->synclist[i];
 
-#ifdef CONFIG_QCOM_KGSL_DEBUG
 		if (event->type == KGSL_CMD_SYNCPOINT_TYPE_FENCE) {
 			struct event_fence_info *priv = event->priv;
 
@@ -62,9 +60,7 @@ static void syncobj_destroy_object(struct kgsl_drawobj *drawobj)
 				kfree(kcb);
 			}
 
-		} else
-#endif
-		if (event->type == KGSL_CMD_SYNCPOINT_TYPE_TIMELINE) {
+		} else if (event->type == KGSL_CMD_SYNCPOINT_TYPE_TIMELINE) {
 			kfree(event->priv);
 		}
 	}
@@ -123,7 +119,6 @@ void kgsl_dump_syncpoints(struct kgsl_device *device,
 				retired);
 			break;
 		}
-#ifdef CONFIG_QCOM_KGSL_DEBUG
 		case KGSL_CMD_SYNCPOINT_TYPE_FENCE: {
 			int j;
 			struct event_fence_info *info = event->priv;
@@ -133,7 +128,6 @@ void kgsl_dump_syncpoints(struct kgsl_device *device,
 					i, info->fences[j].name);
 			break;
 		}
-#endif
 		case KGSL_CMD_SYNCPOINT_TYPE_TIMELINE: {
 			int j;
 			struct event_timeline_info *info = event->priv;
@@ -174,6 +168,10 @@ static void syncobj_timer(struct timer_list *t)
 		"kgsl: possible gpu syncpoint deadlock for context %u timestamp %u\n",
 		drawobj->context->id, drawobj->timestamp);
 
+	set_bit(ADRENO_CONTEXT_FENCE_LOG, &drawobj->context->priv);
+	kgsl_context_dump(drawobj->context);
+	clear_bit(ADRENO_CONTEXT_FENCE_LOG, &drawobj->context->priv);
+
 	dev_err(device->dev, "      pending events:\n");
 
 	for (i = 0; i < syncobj->numsyncs; i++) {
@@ -187,7 +185,6 @@ static void syncobj_timer(struct timer_list *t)
 			dev_err(device->dev, "       [%u] TIMESTAMP %u:%u\n",
 				i, event->context->id, event->timestamp);
 			break;
-#ifdef CONFIG_QCOM_KGSL_DEBUG
 		case KGSL_CMD_SYNCPOINT_TYPE_FENCE: {
 			int j;
 			struct event_fence_info *info = event->priv;
@@ -197,7 +194,6 @@ static void syncobj_timer(struct timer_list *t)
 					i, info->fences[j].name);
 			break;
 		}
-#endif
 		case KGSL_CMD_SYNCPOINT_TYPE_TIMELINE: {
 			int j;
 			struct event_timeline_info *info = event->priv;
@@ -284,7 +280,7 @@ static void drawobj_sync_func(struct kgsl_device *device,
 	kgsl_drawobj_put(&event->syncobj->base);
 }
 
-static void drawobj_sync_timeline_fence_work(struct work_struct *work)
+static void drawobj_sync_timeline_fence_work(struct irq_work *work)
 {
 	struct kgsl_drawobj_sync_event *event = container_of(work,
 		struct kgsl_drawobj_sync_event, work);
@@ -293,7 +289,6 @@ static void drawobj_sync_timeline_fence_work(struct work_struct *work)
 	kgsl_drawobj_put(&event->syncobj->base);
 }
 
-#ifdef CONFIG_QCOM_KGSL_DEBUG
 static void trace_syncpoint_timeline_fence(struct kgsl_drawobj_sync *syncobj,
 	struct dma_fence *f, bool expire)
 {
@@ -324,7 +319,6 @@ static void trace_syncpoint_timeline_fence(struct kgsl_drawobj_sync *syncobj,
 		}
 	}
 }
-#endif
 
 static void drawobj_sync_timeline_fence_callback(struct dma_fence *f,
 		struct dma_fence_cb *cb)
@@ -332,16 +326,14 @@ static void drawobj_sync_timeline_fence_callback(struct dma_fence *f,
 	struct kgsl_drawobj_sync_event *event = container_of(cb,
 		struct kgsl_drawobj_sync_event, cb);
 
-#ifdef CONFIG_QCOM_KGSL_DEBUG
 	trace_syncpoint_timeline_fence(event->syncobj, f, true);
-#endif
 
 	/*
 	 * Mark the event as synced and then fire off a worker to handle
 	 * removing the fence
 	 */
 	if (drawobj_sync_expire(event->device, event))
-		queue_work(kgsl_driver.lockless_workqueue, &event->work);
+		irq_work_queue(&event->work);
 }
 
 static void syncobj_destroy(struct kgsl_drawobj *drawobj)
@@ -445,10 +437,8 @@ static void cmdobj_destroy(struct kgsl_drawobj *drawobj)
 		kmem_cache_free(memobjs_cache, mem);
 	}
 
-	if (drawobj->type & CMDOBJ_TYPE) {
+	if (drawobj->type & CMDOBJ_TYPE)
 		atomic_dec(&drawobj->context->proc_priv->cmd_count);
-		atomic_dec(&drawobj->context->proc_priv->period->active_cmds);
-	}
 }
 
 /**
@@ -472,7 +462,6 @@ void kgsl_drawobj_destroy(struct kgsl_drawobj *drawobj)
 static bool drawobj_sync_fence_func(void *priv)
 {
 	struct kgsl_drawobj_sync_event *event = priv;
-#ifdef CONFIG_QCOM_KGSL_DEBUG
 	struct event_fence_info *info = event->priv;
 	int i;
 
@@ -482,7 +471,6 @@ static bool drawobj_sync_fence_func(void *priv)
 		log_kgsl_syncpoint_fence_expire_event(
 		event->syncobj->base.context->id, info->fences[i].name);
 	}
-#endif
 
 	/*
 	 * Only call kgsl_drawobj_put() if it's not marked for cancellation
@@ -555,7 +543,7 @@ static int drawobj_add_sync_timeline(struct kgsl_device *device,
 	event->device = device;
 	event->context = NULL;
 	event->fence = fence;
-	INIT_WORK(&event->work, drawobj_sync_timeline_fence_work);
+	init_irq_work(&event->work, drawobj_sync_timeline_fence_work);
 
 	INIT_LIST_HEAD(&event->cb.node);
 
@@ -566,8 +554,6 @@ static int drawobj_add_sync_timeline(struct kgsl_device *device,
 	/* Set pending flag before adding callback to avoid race */
 	set_bit(event->id, &syncobj->pending);
 
-	/* Get a dma_fence refcount to hand over to the callback */
-	dma_fence_get(event->fence);
 	ret = dma_fence_add_callback(event->fence,
 		&event->cb, drawobj_sync_timeline_fence_callback);
 
@@ -582,18 +568,11 @@ static int drawobj_add_sync_timeline(struct kgsl_device *device,
 			ret = 0;
 		}
 
-		/* Put the refcount from fence creation */
-		dma_fence_put(event->fence);
 		kgsl_drawobj_put(drawobj);
 		return ret;
 	}
 
-#ifdef CONFIG_QCOM_KGSL_DEBUG
 	trace_syncpoint_timeline_fence(event->syncobj, event->fence, false);
-#endif
-
-	/* Put the refcount from fence creation */
-	dma_fence_put(event->fence);
 	return 0;
 }
 
@@ -604,11 +583,8 @@ static int drawobj_add_sync_fence(struct kgsl_device *device,
 	struct kgsl_cmd_syncpoint_fence sync;
 	struct kgsl_drawobj *drawobj = DRAWOBJ(syncobj);
 	struct kgsl_drawobj_sync_event *event;
-#ifdef CONFIG_QCOM_KGSL_DEBUG
 	struct event_fence_info *priv;
-	unsigned int i;
-#endif
-	unsigned int id;
+	unsigned int id, i;
 
 	if (copy_struct_from_user(&sync, sizeof(sync), data, datasize))
 		return -EFAULT;
@@ -625,21 +601,14 @@ static int drawobj_add_sync_fence(struct kgsl_device *device,
 	event->device = device;
 	event->context = NULL;
 
-#ifdef CONFIG_QCOM_KGSL_DEBUG
 	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
-#endif
 
 	set_bit(event->id, &syncobj->pending);
 
-#ifdef CONFIG_QCOM_KGSL_DEBUG
 	event->handle = kgsl_sync_fence_async_wait(sync.fd,
 				drawobj_sync_fence_func, event, priv);
 
 	event->priv = priv;
-#else
-	event->handle = kgsl_sync_fence_async_wait(sync.fd,
-				drawobj_sync_fence_func, event);
-#endif
 
 	if (IS_ERR_OR_NULL(event->handle)) {
 		int ret = PTR_ERR(event->handle);
@@ -662,13 +631,11 @@ static int drawobj_add_sync_fence(struct kgsl_device *device,
 		return ret;
 	}
 
-#ifdef CONFIG_QCOM_KGSL_DEBUG
 	for (i = 0; priv && i < priv->num_fences; i++) {
 		trace_syncpoint_fence(syncobj, priv->fences[i].name);
 		log_kgsl_syncpoint_fence_event(syncobj->base.context->id,
 			priv->fences[i].name);
 	}
-#endif
 
 	return 0;
 }
@@ -777,9 +744,6 @@ int kgsl_drawobj_sync_add_sync(struct kgsl_device *device,
 	struct kgsl_cmd_syncpoint *sync)
 {
 	struct kgsl_drawobj *drawobj = DRAWOBJ(syncobj);
-
-	if (sync->type != KGSL_CMD_SYNCPOINT_TYPE_FENCE)
-		syncobj->flags |= KGSL_SYNCOBJ_SW;
 
 	if (sync->type == KGSL_CMD_SYNCPOINT_TYPE_TIMESTAMP)
 		return drawobj_add_sync_timestamp_from_user(device,
@@ -1179,23 +1143,8 @@ struct kgsl_drawobj_cmd *kgsl_drawobj_cmd_create(struct kgsl_device *device,
 	INIT_LIST_HEAD(&cmdobj->memlist);
 	cmdobj->requeue_cnt = 0;
 
-	if (!(type & CMDOBJ_TYPE))
-		return cmdobj;
-
-	atomic_inc(&context->proc_priv->cmd_count);
-	atomic_inc(&context->proc_priv->period->active_cmds);
-	spin_lock(&device->work_period_lock);
-	if (!__test_and_set_bit(KGSL_WORK_PERIOD, &device->flags)) {
-		mod_timer(&device->work_period_timer,
-			  jiffies + msecs_to_jiffies(KGSL_WORK_PERIOD_MS));
-		device->gpu_period.begin = ktime_get_ns();
-	}
-
-	/* Take a refcount here and put it back in kgsl_work_period_timer() */
-	if (!__test_and_set_bit(KGSL_WORK_PERIOD, &context->proc_priv->period->flags))
-		kref_get(&context->proc_priv->period->refcount);
-
-	spin_unlock(&device->work_period_lock);
+	if (type & CMDOBJ_TYPE)
+		atomic_inc(&context->proc_priv->cmd_count);
 
 	return cmdobj;
 }

@@ -1,7 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2019-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #ifndef _KGSL_UTIL_H_
@@ -18,18 +17,6 @@
 #define KGSL_GMU_LOG_ENTRY "kgsl_gmu_log"
 #define KGSL_HFIMEM_ENTRY "kgsl_hfi_mem"
 #define KGSL_GMU_DUMPMEM_ENTRY "kgsl_gmu_dump_mem"
-#define KGSL_GMU_RB_ENTRY "kgsl_gmu_rb"
-#define KGSL_GMU_KERNEL_PROF_ENTRY "kgsl_gmu_kernel_profiling"
-#define KGSL_GMU_USER_PROF_ENTRY "kgsl_gmu_user_profiling"
-#define KGSL_GMU_CMD_BUFFER_ENTRY "kgsl_gmu_cmd_buffer"
-#define KGSL_HFI_BIG_IB_ENTRY "kgsl_hfi_big_ib"
-#define KGSL_HFI_BIG_IB_REC_ENTRY "kgsl_hfi_big_ib_rec"
-#define KGSL_ADRENO_CTX_ENTRY "kgsl_adreno_ctx"
-#define KGSL_PROC_PRIV_ENTRY "kgsl_proc_priv"
-#define KGSL_PGTABLE_ENTRY "kgsl_pgtable"
-#define KGSL_GMU_VRB_ENTRY "kgsl_gmu_vrb"
-
-#define MAX_VA_MINIDUMP_STR_LEN 32
 
 struct regulator;
 struct clk_bulk_data;
@@ -139,15 +126,6 @@ int kgsl_clk_set_rate(struct clk_bulk_data *clks, int num_clks,
 int kgsl_zap_shader_load(struct device *dev, const char *name);
 
 /**
- * kgsl_zap_shader_unload - Unload a zap shader
- * @dev: Pointer to the struct device for the GPU platform device
- *
- * Unload zap_shader and shutdown the peripheral
- * Return: 0 on success or negative on failure
- */
-int kgsl_zap_shader_unload(struct device *dev);
-
-/**
  * kgsl_add_to_minidump - Add a physically contiguous section to minidump
  * @name: Name of the section
  * @virt_addr: Virtual address of the section
@@ -180,11 +158,5 @@ int kgsl_add_va_to_minidump(struct device *dev, const char *name, void *ptr,
  * @device: Pointer to kgsl device
  */
 void kgsl_qcom_va_md_register(struct kgsl_device *device);
-
-/**
- * kgsl_qcom_va_md_unregister - Unregister driver with va-minidump
- * @device: Pointer to kgsl device
- */
-void kgsl_qcom_va_md_unregister(struct kgsl_device *device);
 
 #endif

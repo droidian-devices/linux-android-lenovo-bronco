@@ -1,33 +1,8 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2013-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
-#define trace_adreno_cmdbatch_fault(...) ((void)0)
-#define trace_adreno_cmdbatch_queued(...) ((void)0)
-#define trace_adreno_cmdbatch_recovery(...) ((void)0)
-#define trace_adreno_cmdbatch_retired(...) ((void)0)
-#define trace_adreno_cmdbatch_submitted(...) ((void)0)
-#define trace_adreno_cmdbatch_sync(...) ((void)0)
-#define trace_adreno_drawctxt_invalidate(...) ((void)0)
-#define trace_adreno_drawctxt_sleep(...) ((void)0)
-#define trace_adreno_drawctxt_switch(...) ((void)0)
-#define trace_adreno_drawctxt_wait_done(...) ((void)0)
-#define trace_adreno_drawctxt_wait_start(...) ((void)0)
-#define trace_adreno_drawctxt_wake(...) ((void)0)
-#define trace_adreno_gpu_fault(...) ((void)0)
-#define trace_adreno_hw_preempt_comp_to_clear(...) ((void)0)
-#define trace_adreno_hw_preempt_token_submit(...) ((void)0)
-#define trace_adreno_ifpc_count(...) ((void)0)
-#define trace_adreno_preempt_done(...) ((void)0)
-#define trace_adreno_preempt_trigger(...) ((void)0)
-#define trace_adreno_sp_tp(...) ((void)0)
-#define trace_dispatch_queue_context(...) ((void)0)
-#define trace_gmu_ao_sync(...) ((void)0)
-#define trace_gmu_event(...) ((void)0)
-
-#if 0
 #if !defined(_ADRENO_TRACE_H) || defined(TRACE_HEADER_MULTI_READ)
 #define _ADRENO_TRACE_H
 
@@ -42,16 +17,6 @@
 #include "adreno_a3xx.h"
 #include "adreno_a5xx.h"
 #include "adreno_gen7.h"
-#include "adreno_hfi.h"
-
-#ifndef CONFIG_QCOM_KGSL_DEBUG
-#undef DEFINE_EVENT
-#undef TRACE_EVENT
-#undef DECLARE_EVENT_CLASS
-#define DEFINE_EVENT DEFINE_EVENT_NOP
-#define TRACE_EVENT TRACE_EVENT_NOP
-#define DECLARE_EVENT_CLASS DECLARE_EVENT_CLASS_NOP
-#endif
 
 #define ADRENO_FT_TYPES \
 	{ BIT(KGSL_FT_OFF), "off" }, \
@@ -87,68 +52,6 @@ TRACE_EVENT(adreno_cmdbatch_queued,
 			__entry->flags ? __print_flags(__entry->flags, "|",
 						KGSL_DRAWOBJ_FLAGS) : "none"
 	)
-);
-
-TRACE_EVENT(adreno_input_hw_fence,
-	TP_PROTO(u32 id, u64 context, u64 seqno, u64 flags, const char *name),
-	TP_ARGS(id, context, seqno, flags, name),
-	TP_STRUCT__entry(
-		__field(u32, id)
-		__field(u64, context)
-		__field(u64, seqno)
-		__field(u64, flags)
-		__string(fence_name, name)
-	),
-	TP_fast_assign(
-		__entry->id = id;
-		__entry->context = context;
-		__entry->seqno = seqno;
-		__entry->flags = flags;
-		__assign_str(fence_name, name);
-	),
-	TP_printk(
-		"ctx=%u id=%lld seqno=%lld flags=%s name=%s",
-			__entry->id,  __entry->context, __entry->seqno,
-			__entry->flags ? __print_flags(__entry->flags, "|",
-				{ GMU_SYNCOBJ_KGSL_FENCE, "KGSL_FENCE" },
-				{ GMU_SYNCOBJ_RETIRED, "RETIRED" }) : "none",
-			__get_str(fence_name))
-);
-
-TRACE_EVENT(adreno_syncobj_submitted,
-	TP_PROTO(u32 id, u32 timestamp, u32 num_syncobj,
-		uint64_t ticks),
-	TP_ARGS(id, timestamp, num_syncobj, ticks),
-	TP_STRUCT__entry(
-		__field(u32, id)
-		__field(u32, timestamp)
-		__field(u32, num_syncobj)
-		__field(uint64_t, ticks)
-	),
-	TP_fast_assign(
-		__entry->id = id;
-		__entry->timestamp = timestamp;
-		__entry->num_syncobj = num_syncobj;
-		__entry->ticks = ticks;
-	),
-	TP_printk(
-		"ctx=%u ts=%u num_sync=%u ticks=%lld",
-			__entry->id, __entry->timestamp, __entry->num_syncobj, __entry->ticks)
-);
-
-TRACE_EVENT(adreno_syncobj_retired,
-	TP_PROTO(u32 id, u32 timestamp),
-	TP_ARGS(id, timestamp),
-	TP_STRUCT__entry(
-		__field(u32, id)
-		__field(u32, timestamp)
-	),
-	TP_fast_assign(
-		__entry->id = id;
-		__entry->timestamp = timestamp;
-	),
-	TP_printk(
-		"ctx=%u ts=%u", __entry->id, __entry->timestamp)
 );
 
 TRACE_EVENT(adreno_cmdbatch_submitted,
@@ -198,7 +101,6 @@ TRACE_EVENT(adreno_cmdbatch_submitted,
 	)
 );
 
-#ifdef CONFIG_QCOM_KGSL_DEBUG
 TRACE_EVENT(adreno_cmdbatch_retired,
 		TP_PROTO(struct kgsl_context *context, struct retire_info *info,
 			unsigned int flags, int q_inflight,
@@ -221,7 +123,6 @@ TRACE_EVENT(adreno_cmdbatch_retired,
 		__field(unsigned int, dispatch_queue)
 		__field(uint64_t, submitted_to_rb)
 		__field(uint64_t, retired_on_gmu)
-		__field(uint64_t, active)
 		),
 	TP_fast_assign(
 		__entry->id = context->id;
@@ -239,11 +140,10 @@ TRACE_EVENT(adreno_cmdbatch_retired,
 		__entry->dispatch_queue = info->gmu_dispatch_queue;
 		__entry->submitted_to_rb = info->submitted_to_rb;
 		__entry->retired_on_gmu = info->retired_on_gmu;
-		__entry->active = info->active;
 		),
 
 	TP_printk(
-		"ctx=%u ctx_prio=%d ts=%u inflight=%d recovery=%s flags=%s start=%llu retire=%llu rb_id=%d, r/w=%x/%x, q_inflight=%d, dq_id=%u, submitted_to_rb=%llu retired_on_gmu=%llu active=%llu",
+		"ctx=%u ctx_prio=%d ts=%u inflight=%d recovery=%s flags=%s start=%llu retire=%llu rb_id=%d, r/w=%x/%x, q_inflight=%d, dq_id=%u, submitted_to_rb=%llu retired_on_gmu=%llu",
 			__entry->id, __entry->prio, __entry->timestamp,
 			__entry->inflight,
 			__entry->recovery ?
@@ -256,11 +156,9 @@ TRACE_EVENT(adreno_cmdbatch_retired,
 			__entry->rb_id, __entry->rptr, __entry->wptr,
 			__entry->q_inflight,
 			__entry->dispatch_queue,
-			__entry->submitted_to_rb, __entry->retired_on_gmu,
-			__entry->active
+			__entry->submitted_to_rb, __entry->retired_on_gmu
 	 )
 );
-#endif
 
 TRACE_EVENT(gmu_ao_sync,
 	TP_PROTO(u64 ticks),
@@ -876,44 +774,40 @@ TRACE_EVENT(adreno_hw_preempt_token_submit,
 );
 
 TRACE_EVENT(adreno_preempt_trigger,
-	TP_PROTO(u32 cur_rb_id, u32 next_rb_id,
-		u32 cntl, u64 gmu_ticks),
-	TP_ARGS(cur_rb_id, next_rb_id, cntl, gmu_ticks),
+	TP_PROTO(struct adreno_ringbuffer *cur, struct adreno_ringbuffer *next,
+		unsigned int cntl),
+	TP_ARGS(cur, next, cntl),
 	TP_STRUCT__entry(
-		__field(u32, cur)
-		__field(u32, next)
-		__field(u32, cntl)
-		__field(u64, ticks)
+		__field(unsigned int, cur)
+		__field(unsigned int, next)
+		__field(unsigned int, cntl)
 	),
 	TP_fast_assign(
-		__entry->cur = cur_rb_id;
-		__entry->next = next_rb_id;
+		__entry->cur = cur->id;
+		__entry->next = next->id;
 		__entry->cntl = cntl;
-		__entry->ticks = gmu_ticks;
 	),
-	TP_printk("trigger from id=%d to id=%d cntl=%x ticks=%llu",
-		__entry->cur, __entry->next, __entry->cntl, __entry->ticks
+	TP_printk("trigger from id=%d to id=%d cntl=%x",
+		__entry->cur, __entry->next, __entry->cntl
 	)
 );
 
 TRACE_EVENT(adreno_preempt_done,
-	TP_PROTO(u32 cur_rb_id, u32 next_rb_id,
-		u32 level, u64 gmu_ticks),
-	TP_ARGS(cur_rb_id, next_rb_id, level, gmu_ticks),
+	TP_PROTO(struct adreno_ringbuffer *cur, struct adreno_ringbuffer *next,
+		unsigned int level),
+	TP_ARGS(cur, next, level),
 	TP_STRUCT__entry(
-		__field(u32, cur)
-		__field(u32, next)
-		__field(u32, level)
-		__field(u64, ticks)
+		__field(unsigned int, cur)
+		__field(unsigned int, next)
+		__field(unsigned int, level)
 	),
 	TP_fast_assign(
-		__entry->cur = cur_rb_id;
-		__entry->next = next_rb_id;
+		__entry->cur = cur->id;
+		__entry->next = next->id;
 		__entry->level = level;
-		__entry->ticks = gmu_ticks;
 	),
-	TP_printk("done switch to id=%d from id=%d level=%x ticks=%llu",
-		__entry->next, __entry->cur, __entry->level, __entry->ticks
+	TP_printk("done switch to id=%d from id=%d level=%x",
+		__entry->next, __entry->cur, __entry->level
 	)
 );
 
@@ -933,4 +827,3 @@ TRACE_EVENT(adreno_ifpc_count,
 
 /* This part must be outside protection */
 #include <trace/define_trace.h>
-#endif
